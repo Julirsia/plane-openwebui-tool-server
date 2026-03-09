@@ -1,0 +1,23 @@
+transitions:
+  New:
+    - Triage
+  Triage:
+    - In Progress
+    - Waiting Customer
+    - Ready to Reply
+    - Resolved
+  In Progress:
+    - Waiting Customer
+    - Ready to Reply
+    - Resolved
+  Waiting Customer:
+    - In Progress
+    - Ready to Reply
+  Ready to Reply:
+    - Waiting Customer
+    - Resolved
+  Resolved:
+    - Closed
+    - In Progress
+  Closed:
+    - In Progress
