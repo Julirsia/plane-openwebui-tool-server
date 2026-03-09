@@ -111,6 +111,17 @@ class FakePlaneClient:
                 "assignees": [self._member("홍길동")],
                 "updated_at": "2026-03-10T01:00:00+00:00",
             },
+            "SOFT-170": {
+                "id": "wi-170",
+                "identifier": "SOFT-170",
+                "name": "기존 티켓 포맷 로그인 오류",
+                "description_html": "<p>고객이 로그인 오류를 제보했습니다.</p><p>SSO 설정 이후부터 발생했다고 합니다.</p>",
+                "state": {"id": "state-progress", "name": "In Progress"},
+                "priority": "high",
+                "labels": [self._label("kind:troubleshooting"), self._label("product:auth"), self._label("severity:s2")],
+                "assignees": [self._member("홍길동")],
+                "updated_at": "2026-03-08T01:00:00+00:00",
+            },
         }
         self.comments: dict[str, list[dict[str, Any]]] = {
             "wi-214": [
@@ -123,6 +134,7 @@ class FakePlaneClient:
                 }
             ],
             "wi-215": [],
+            "wi-170": [],
         }
         self.activities = {
             "wi-214": [
@@ -136,6 +148,7 @@ class FakePlaneClient:
                 }
             ],
             "wi-215": [],
+            "wi-170": [],
         }
         self.created_comment_payloads: list[dict[str, Any]] = []
         self.updated_payloads: list[dict[str, Any]] = []

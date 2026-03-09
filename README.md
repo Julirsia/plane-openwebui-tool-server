@@ -18,6 +18,7 @@
 - 자동 이메일 발송은 하지 않습니다.
 - `description_html`은 canonical structured ticket 문서입니다.
 - `INTERNAL` comment는 triage, summary refresh, state change, email draft snapshot 로그로 사용합니다.
+- 기존 Plane 티켓도 읽을 수 있습니다. canonical `ticket_meta`가 없는 legacy 티켓은 label/title/description 기반 fallback으로 해석하고, 첫 section update 시 canonical 형식으로 승격됩니다.
 
 ## 코드 구조
 
@@ -167,10 +168,12 @@ LOG_LEVEL=INFO
   - `has_more`는 최종 필터링 결과가 `limit`를 초과하는지 기준으로 일관되게 계산
 - `GET /tickets/{identifier}/context`
   - canonical sections, 최근 internal notes, 최근 activities, 현재 summary, `allowed_next_states`, `expected_updated_at` 조회
+  - legacy 티켓이면 fallback 구조화 결과와 `is_legacy_ticket=true`를 반환
 - `POST /tickets/{identifier}/upsert-sections`
   - 템플릿 whitelist에 있는 section만 수정
   - raw HTML 입력 없음
   - `expected_updated_at` 충돌 검사
+  - legacy 티켓이면 update 시 canonical HTML로 자동 승격
 - `POST /tickets/{identifier}/transition`
   - 허용된 상태 전이만 수행
   - `reason` 필수

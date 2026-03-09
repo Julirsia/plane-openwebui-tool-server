@@ -39,6 +39,7 @@ from app.policy import (
     validate_state_transition,
 )
 from app.renderer import render_ticket_html, render_title
+from app.ticket_document import resolve_ticket_document
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 md = MarkdownIt("commonmark", {"breaks": True})
@@ -93,20 +94,6 @@ async def _context_maps(plane_client) -> dict[str, Any]:
     }
 
 
-def _detect_template_id(sections: dict[str, str]) -> str:
-    ticket_meta = sections.get("ticket_meta", "")
-    lines = [line.strip() for line in ticket_meta.splitlines() if line.strip()]
-    for idx, line in enumerate(lines):
-        if "template_id" in line:
-            if ":" in line:
-                _, value = line.split(":", 1)
-                if value.strip():
-                    return value.strip()
-            if idx + 1 < len(lines):
-                return lines[idx + 1].lstrip(": ").strip()
-    raise HTTPException(status_code=400, detail="Ticket template_id not found in ticket_meta")
-
-
 def _search_match(ticket: dict[str, Any], sections: dict[str, str], payload: SearchTicketsRequest) -> bool:
     if payload.state_names and _state_name(ticket) not in payload.state_names:
         return False
@@ -135,7 +122,7 @@ def _search_match(ticket: dict[str, Any], sections: dict[str, str], payload: Sea
     return True
 
 
-def _search_item(ticket: dict[str, Any], sections: dict[str, str], transition_policy: dict[str, list[str]]) -> TicketSearchItem:
+def _search_item(ticket: dict[str, Any], document, transition_policy: dict[str, list[str]]) -> TicketSearchItem:
     state_name = _state_name(ticket)
     return TicketSearchItem(
         identifier=ticket["identifier"],
@@ -145,9 +132,9 @@ def _search_item(ticket: dict[str, Any], sections: dict[str, str], transition_po
         assignee_names=_ticket_assignee_names(ticket),
         key_labels=key_labels(_ticket_label_names(ticket)),
         updated_at=parse_plane_datetime(ticket.get("updated_at")),
-        current_summary_excerpt=sections.get("current_summary", "")[:240],
-        customer_org=_parse_customer_org(sections),
-        template_id=_detect_template_id(sections),
+        current_summary_excerpt=document.sections.get("current_summary", "")[:240],
+        customer_org=_parse_customer_org(document.sections),
+        template_id=document.template_id,
         allowed_next_states=allowed_next_states(transition_policy, state_name),
     )
 
@@ -156,6 +143,7 @@ def _search_item(ticket: dict[str, Any], sections: dict[str, str], transition_po
 async def search_tickets(
     payload: SearchTicketsRequest,
     plane_client=Depends(get_plane_client),
+    registry=Depends(get_template_registry),
     transition_policy=Depends(get_transition_policy),
 ) -> SearchTicketsResponse:
     matched: list[TicketSearchItem] = []
@@ -167,9 +155,10 @@ async def search_tickets(
         if not results:
             break
         for ticket in results:
-            sections = parse_ticket_sections(ticket.get("description_html", ""))
+            document = resolve_ticket_document(ticket, registry)
+            sections = document.sections
             if _search_match(ticket, sections, payload):
-                matched.append(_search_item(ticket, sections, transition_policy))
+                matched.append(_search_item(ticket, document, transition_policy))
         if len(results) < batch_size:
             break
         offset += batch_size
@@ -232,9 +221,10 @@ async def get_ticket_context(
 ) -> TicketContextResponse:
     ticket = await plane_client.get_work_item_by_identifier(identifier)
     work_item_id = ticket["id"]
-    sections = parse_ticket_sections(ticket.get("description_html", ""))
-    template_id = _detect_template_id(sections)
-    template = registry.get(template_id)
+    document = resolve_ticket_document(ticket, registry)
+    sections = document.sections
+    template_id = document.template_id
+    template = document.template
     comments = await plane_client.list_comments(work_item_id, notes_limit)
     activities = await plane_client.list_activities(work_item_id, activities_limit)
     state_name = _state_name(ticket)
@@ -248,6 +238,7 @@ async def get_ticket_context(
         "updated_at": parse_plane_datetime(ticket.get("updated_at")),
         "template_id": template_id,
         "allowed_next_states": allowed_next_states(transition_policy, state_name),
+        "is_legacy_ticket": document.is_legacy,
     }
     note_models = [
         InternalNote(
@@ -291,8 +282,9 @@ async def upsert_sections(
 ) -> UpsertSectionsResponse:
     ticket = await plane_client.get_work_item_by_identifier(identifier)
     ensure_unmodified(payload.expected_updated_at, parse_plane_datetime(ticket.get("updated_at")))
-    sections = parse_ticket_sections(ticket.get("description_html", ""))
-    template = registry.get(_detect_template_id(sections))
+    document = resolve_ticket_document(ticket, registry)
+    sections = document.sections
+    template = document.template
     ensure_editable_sections(template, payload.sections)
     merged_meta = dict(payload.sections)
     ticket_meta = sections.get("ticket_meta", "")
@@ -309,14 +301,19 @@ async def upsert_sections(
             lines.append(f"last_updated_by_operator: {payload.operator_name}")
         merged_meta["ticket_meta"] = "\n".join(lines)
     order = ["ticket_meta"] + template["required_sections"] + template.get("optional_sections", [])
-    updated_html = upsert_ticket_sections(ticket.get("description_html", ""), merged_meta, order)
+    base_html = ticket.get("description_html", "")
+    if document.is_legacy:
+        base_html = render_ticket_html(template, document.attributes, document.sections, payload.operator_name)
+    updated_html = upsert_ticket_sections(base_html, merged_meta, order)
     updated_ticket = await plane_client.update_work_item(ticket["id"], {"description_html": updated_html})
     note_created = False
     if payload.append_note:
         work_item_id = ticket["id"]
         comment_html = _build_note_html(
             f"[SUMMARY_REFRESH][by:{payload.operator_name}]",
-            [f"updated sections: {', '.join(payload.sections.keys())}"] + ([f"change summary: {payload.change_summary}"] if payload.change_summary else []),
+            [f"updated sections: {', '.join(payload.sections.keys())}"]
+            + (["legacy ticket auto-canonicalized"] if document.is_legacy else [])
+            + ([f"change summary: {payload.change_summary}"] if payload.change_summary else []),
         )
         await plane_client.create_comment(work_item_id, {"comment_html": comment_html, "access": "INTERNAL"})
         note_created = True
@@ -335,6 +332,7 @@ async def transition_ticket(
     identifier: str,
     payload: TransitionRequest,
     plane_client=Depends(get_plane_client),
+    registry=Depends(get_template_registry),
     transition_policy=Depends(get_transition_policy),
 ) -> TransitionResponse:
     ticket = await plane_client.get_work_item_by_identifier(identifier)
@@ -352,7 +350,7 @@ async def transition_ticket(
         )
         await plane_client.create_comment(ticket["id"], {"comment_html": comment_html, "access": "INTERNAL"})
         note_created = True
-    sections = parse_ticket_sections(updated_ticket.get("description_html", ticket.get("description_html", "")))
+    document = resolve_ticket_document(updated_ticket, registry)
     return TransitionResponse(
         identifier=identifier,
         from_state_name=current_state_name,
@@ -360,7 +358,7 @@ async def transition_ticket(
         updated_at=parse_plane_datetime(updated_ticket.get("updated_at")),
         allowed_next_states_after=allowed_next_states(transition_policy, payload.to_state_name),
         note_created=note_created,
-        current_summary=sections.get("current_summary", ""),
+        current_summary=document.sections.get("current_summary", ""),
     )
 
 

@@ -134,6 +134,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `expected_updated_at`이 맞지 않으면 서버가 409로 막습니다. 이 경우 context를 다시 읽고 재시도해야 합니다.
 - `editable_sections`는 템플릿 YAML 외부 정의를 따릅니다. 허용되지 않은 section은 400으로 거부됩니다.
 - API key 는 shared service token 이므로 Plane의 최종 감사 주체는 서비스 계정입니다. `operator_name`이 내부 note 에 남습니다.
+- 기존 Plane 티켓에 canonical `ticket_meta`가 없어도 읽기는 가능합니다. 이 경우 서버가 legacy fallback으로 context를 구성합니다.
+- legacy 티켓을 `upsert-sections`로 처음 수정하면 서버가 canonical section HTML로 자동 승격합니다.
 
 ## 9. 운영자 체크리스트
 

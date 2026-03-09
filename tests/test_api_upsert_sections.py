@@ -32,3 +32,20 @@ def test_upsert_sections_rejects_unknown_section(client) -> None:
         },
     )
     assert response.status_code == 400
+
+
+def test_upsert_sections_auto_canonicalizes_legacy_ticket(client, fake_plane_client) -> None:
+    response = client.post(
+        "/tickets/SOFT-170/upsert-sections",
+        json={
+            "operator_name": "홍길동",
+            "expected_updated_at": "2026-03-08T01:00:00+00:00",
+            "sections": {"current_summary": "legacy 티켓을 canonical 형식으로 승격했습니다."},
+            "append_note": True,
+        },
+    )
+    assert response.status_code == 200
+    payload = fake_plane_client.updated_payloads[-1]["payload"]
+    assert 'data-ticket-section="ticket_meta"' in payload["description_html"]
+    assert "legacy 티켓을 canonical 형식으로 승격했습니다." in payload["description_html"]
+    assert "legacy ticket auto-canonicalized" in fake_plane_client.created_comment_payloads[-1]["payload"]["comment_html"]
