@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from app.config import Settings, _infer_workspace_slug, _normalize_api_base_url
 from app.plane_client import PlaneClient
@@ -220,4 +221,34 @@ async def test_project_identifier_is_auto_resolved_before_project_scoped_calls()
         "/api/v1/workspaces/my-workspace/projects/",
         "/api/v1/workspaces/my-workspace/projects/project-uuid/states/",
     ]
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_request_retries_get_but_not_post() -> None:
+    get_attempts = {"count": 0}
+    post_attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            get_attempts["count"] += 1
+            if get_attempts["count"] < 3:
+                return httpx.Response(503, json={"detail": "retry me"})
+            return httpx.Response(200, json={"ok": True})
+        if request.method == "POST":
+            post_attempts["count"] += 1
+            return httpx.Response(503, json={"detail": "do not retry"})
+        raise AssertionError(f"Unexpected method: {request.method}")
+
+    client = PlaneClient(_settings())
+    await client._client.aclose()
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=client._client.headers)
+
+    get_result = await client._request("GET", "https://plane.example.com/test-get")
+    assert get_result == {"ok": True}
+    assert get_attempts["count"] == 3
+
+    with pytest.raises(HTTPException):
+        await client._request("POST", "https://plane.example.com/test-post", json={"x": 1})
+    assert post_attempts["count"] == 1
     await client.close()

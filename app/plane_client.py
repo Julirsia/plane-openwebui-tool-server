@@ -12,6 +12,7 @@ from app.cache import TTLCache
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
+RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 class PlaneClient:
@@ -90,10 +91,15 @@ class PlaneClient:
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> Any:
         attempts = 0
+        normalized_method = method.upper()
         while True:
             attempts += 1
-            response = await self._client.request(method, url, **kwargs)
-            if response.status_code in {429, 500, 502, 503, 504} and attempts < 4:
+            response = await self._client.request(normalized_method, url, **kwargs)
+            if (
+                normalized_method in RETRYABLE_METHODS
+                and response.status_code in {429, 500, 502, 503, 504}
+                and attempts < 4
+            ):
                 await asyncio.sleep(0.3 * (2 ** (attempts - 1)))
                 continue
             if response.is_error:
