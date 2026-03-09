@@ -8,13 +8,6 @@ from typing_extensions import Annotated
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
-VALID_CHANNELS = {"email", "chat", "phone", "manual"}
-VALID_PRODUCTS = {"auth", "api", "admin", "billing", "unknown"}
-VALID_SEVERITIES = {"s1", "s2", "s3", "s4"}
-VALID_CUSTOMER_TIERS = {"premium", "standard", "unknown"}
-VALID_PRIORITIES = {"none", "urgent", "high", "medium", "low"}
-VALID_EMAIL_DRAFT_TYPES = {"acknowledge", "request_info", "progress_update", "resolution"}
-
 
 class MetaItem(BaseModel):
     id: str
@@ -47,44 +40,25 @@ class ContextResponse(BaseModel):
     limits: dict[str, int]
 
 
-class TicketAttributes(BaseModel):
-    customer_name: NonEmptyStr
-    customer_org: NonEmptyStr
-    channel: NonEmptyStr
-    product: NonEmptyStr
-    severity: NonEmptyStr
-    customer_tier: NonEmptyStr
-    priority: NonEmptyStr
-    initial_state_name: NonEmptyStr
-    assignee_name: Optional[str] = None
-
-
-class TicketContent(BaseModel):
-    short_summary: NonEmptyStr
-    current_summary: NonEmptyStr
-    customer_symptom: NonEmptyStr
-    impact: NonEmptyStr
-    environment: str = ""
-    reproduction: str = ""
-    attempted_actions: str = ""
-    confirmed_facts: NonEmptyStr
-    open_questions: NonEmptyStr
-    suspected_cause: str = ""
-    next_actions_internal: NonEmptyStr
-    customer_reply_points: NonEmptyStr
-    resolution: str = ""
-
-
 class CreateOptions(BaseModel):
     add_initial_note: bool = False
 
 
 class CreateTicketRequest(BaseModel):
     operator_name: NonEmptyStr
-    template_id: NonEmptyStr
-    attributes: TicketAttributes
-    content: TicketContent
+    title: Optional[str] = None
+    description_html: Optional[str] = None
+    description_text: Optional[str] = None
+    initial_state_name: Optional[str] = None
+    priority: Optional[str] = None
+    label_names: list[str] = Field(default_factory=list)
+    assignee_names: list[str] = Field(default_factory=list)
+    template_id: Optional[str] = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    sections: dict[str, Any] = Field(default_factory=dict)
+    content: dict[str, Any] = Field(default_factory=dict)
     options: CreateOptions = Field(default_factory=CreateOptions)
+    model_config = ConfigDict(extra="allow", str_strip_whitespace=True)
 
 
 class CreateTicketResponse(BaseModel):
@@ -105,8 +79,8 @@ class SearchTicketsRequest(BaseModel):
     @field_validator("limit")
     @classmethod
     def validate_limit(cls, value: int) -> int:
-        if value < 1 or value > 50:
-            raise ValueError("limit must be between 1 and 50")
+        if value < 1 or value > 100:
+            raise ValueError("limit must be between 1 and 100")
         return value
 
 
@@ -116,11 +90,12 @@ class TicketSearchItem(BaseModel):
     state_name: str
     priority: Optional[str] = None
     assignee_names: list[str] = Field(default_factory=list)
-    key_labels: list[str] = Field(default_factory=list)
+    label_names: list[str] = Field(default_factory=list)
     updated_at: Optional[datetime] = None
     current_summary_excerpt: str = ""
-    customer_org: str = ""
-    template_id: str = ""
+    description_excerpt: str = ""
+    inferred_template_id: str = ""
+    is_legacy_ticket: bool = False
     allowed_next_states: list[str] = Field(default_factory=list)
 
 
@@ -151,28 +126,63 @@ class ActivityItem(BaseModel):
 class TicketContextResponse(BaseModel):
     ticket: dict[str, Any]
     current_summary: str = ""
+    description_text: str = ""
+    description_html: str = ""
     sections: dict[str, str]
+    parsed_sections: dict[str, str]
     editable_sections: list[str]
     recent_internal_notes: list[InternalNote]
     recent_activities: list[ActivityItem]
     write_guard: dict[str, str]
 
 
+class UpdateTicketRequest(BaseModel):
+    operator_name: NonEmptyStr
+    expected_updated_at: Optional[datetime] = None
+    title: Optional[str] = None
+    description_html: Optional[str] = None
+    description_text: Optional[str] = None
+    state_name: Optional[str] = None
+    priority: Optional[str] = None
+    label_names: Optional[list[str]] = None
+    assignee_names: Optional[list[str]] = None
+    append_note: bool = False
+    note_markdown: Optional[str] = None
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class UpdateTicketResponse(BaseModel):
+    identifier: str
+    updated_at: Optional[datetime] = None
+    applied_fields: list[str]
+    ticket: dict[str, Any]
+    note_created: bool
+
+
+class TicketCommentRequest(BaseModel):
+    operator_name: NonEmptyStr
+    body_markdown: NonEmptyStr
+    access: Literal["INTERNAL"] = "INTERNAL"
+
+
+class TicketCommentResponse(BaseModel):
+    identifier: str
+    comment: dict[str, Any]
+
+
 class UpsertSectionsRequest(BaseModel):
     operator_name: NonEmptyStr
-    expected_updated_at: datetime
+    expected_updated_at: Optional[datetime] = None
     sections: dict[str, NonEmptyStr]
     append_note: bool = True
-    change_summary: Annotated[Optional[str], StringConstraints(max_length=200)] = None
+    change_summary: Optional[str] = None
     model_config = ConfigDict(str_strip_whitespace=True)
 
     @field_validator("sections")
     @classmethod
-    def validate_sections_count(cls, value: dict[str, str]) -> dict[str, str]:
+    def validate_sections_non_empty(cls, value: dict[str, str]) -> dict[str, str]:
         if not value:
             raise ValueError("sections must not be empty")
-        if len(value) > 6:
-            raise ValueError("up to 6 sections can be updated at once")
         return value
 
 
@@ -186,9 +196,9 @@ class UpsertSectionsResponse(BaseModel):
 
 class TransitionRequest(BaseModel):
     operator_name: NonEmptyStr
-    expected_updated_at: datetime
+    expected_updated_at: Optional[datetime] = None
     to_state_name: NonEmptyStr
-    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
+    reason: Optional[str] = None
     append_note: bool = True
 
 
@@ -204,7 +214,7 @@ class TransitionResponse(BaseModel):
 
 class SaveEmailDraftRequest(BaseModel):
     operator_name: NonEmptyStr
-    expected_updated_at: datetime
+    expected_updated_at: Optional[datetime] = None
     draft_type: Literal["acknowledge", "request_info", "progress_update", "resolution"]
     subject: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
     body_text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
@@ -216,9 +226,3 @@ class SaveEmailDraftResponse(BaseModel):
     updated_at: Optional[datetime] = None
     saved_comment_id: str
     applied_comm_label: Optional[str] = None
-
-
-def validate_enum(name: str, value: str, allowed: set[str]) -> str:
-    if value not in allowed:
-        raise ValueError(f"{name} must be one of: {', '.join(sorted(allowed))}")
-    return value

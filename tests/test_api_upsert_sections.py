@@ -1,4 +1,4 @@
-def test_upsert_sections_updates_allowed_fields_and_adds_note(client, fake_plane_client) -> None:
+def test_upsert_sections_updates_ticket_and_adds_note(client, fake_plane_client) -> None:
     response = client.post(
         "/tickets/SUP-214/upsert-sections",
         json={
@@ -18,20 +18,6 @@ def test_upsert_sections_updates_allowed_fields_and_adds_note(client, fake_plane
     assert body["note_created"] is True
     assert fake_plane_client.created_comment_payloads[-1]["payload"]["access"] == "INTERNAL"
     assert fake_plane_client.updated_payloads[-1]["work_item_id"] == "wi-214"
-    assert "description_html" in fake_plane_client.updated_payloads[-1]["payload"]
-
-
-def test_upsert_sections_rejects_unknown_section(client) -> None:
-    response = client.post(
-        "/tickets/SUP-214/upsert-sections",
-        json={
-            "operator_name": "홍길동",
-            "expected_updated_at": "2026-03-09T01:00:00+00:00",
-            "sections": {"impact": "바꾸면 안 됨"},
-            "append_note": False,
-        },
-    )
-    assert response.status_code == 400
 
 
 def test_upsert_sections_auto_canonicalizes_legacy_ticket(client, fake_plane_client) -> None:
@@ -47,5 +33,4 @@ def test_upsert_sections_auto_canonicalizes_legacy_ticket(client, fake_plane_cli
     assert response.status_code == 200
     payload = fake_plane_client.updated_payloads[-1]["payload"]
     assert 'data-ticket-section="ticket_meta"' in payload["description_html"]
-    assert "legacy 티켓을 canonical 형식으로 승격했습니다." in payload["description_html"]
     assert "legacy ticket auto-canonicalized" in fake_plane_client.created_comment_payloads[-1]["payload"]["comment_html"]

@@ -1,35 +1,16 @@
-from pathlib import Path
-
 import pytest
-import yaml
 from fastapi import HTTPException
 
-from app.policy import ensure_editable_sections, normalize_attributes, validate_state_transition
-from app.templates_registry import TemplateRegistry
+from app.policy import resolve_label_ids, resolve_member_ids, resolve_state_id, validate_state_transition
 
 
-def test_transition_policy_allows_and_denies() -> None:
-    policy = yaml.safe_load((Path(__file__).resolve().parent.parent / "policies" / "transition_policy.yaml").read_text())["transitions"]
-    validate_state_transition(policy, "Triage", "Resolved")
+def test_transition_policy_is_optional_by_default() -> None:
+    validate_state_transition({"New": ["Triage"]}, "New", "Closed", enforce=False)
     with pytest.raises(HTTPException):
-        validate_state_transition(policy, "New", "Resolved")
+        validate_state_transition({"New": ["Triage"]}, "New", "Closed", enforce=True)
 
 
-def test_normalize_attributes_rejects_invalid_values() -> None:
-    with pytest.raises(ValueError):
-        normalize_attributes(
-            {
-                "channel": "sms",
-                "product": "auth",
-                "severity": "s2",
-                "customer_tier": "standard",
-                "priority": "high",
-            }
-        )
-
-
-def test_editable_sections_whitelist_enforced() -> None:
-    template = TemplateRegistry(Path(__file__).resolve().parent.parent / "templates").get("support.troubleshooting")
-    ensure_editable_sections(template, {"current_summary": "ok"})
-    with pytest.raises(HTTPException):
-        ensure_editable_sections(template, {"impact": "nope"})
+def test_runtime_name_resolution_helpers() -> None:
+    assert resolve_state_id("Triage", {"Triage": "state-triage"}) == "state-triage"
+    assert resolve_label_ids(["kind:billing"], {"kind:billing": "label-kind:billing"}) == ["label-kind:billing"]
+    assert resolve_member_ids(["홍길동"], {"홍길동": "member-1"}) == ["member-1"]

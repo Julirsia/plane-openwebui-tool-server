@@ -12,7 +12,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from app.deps import get_plane_client, get_template_registry, get_transition_policy
+from app.config import Settings
+from app.deps import get_app_settings, get_plane_client, get_template_registry, get_transition_policy
 from app.main import app
 from app.renderer import render_ticket_html
 from app.templates_registry import TemplateRegistry
@@ -185,15 +186,18 @@ class FakePlaneClient:
 
     async def create_work_item(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.created_tickets.append(deepcopy(payload))
+        state_id = payload.get("state", "state-triage")
+        label_ids = payload.get("labels", [])
+        assignee_ids = payload.get("assignees", [])
         ticket = {
             "id": "wi-999",
             "identifier": "SUP-999",
             "name": payload["name"],
-            "description_html": payload["description_html"],
-            "state": {"id": payload["state"], "name": "Triage"},
-            "priority": payload["priority"],
-            "labels": [label for label in self.labels if label["id"] in payload["labels"]],
-            "assignees": [member for member in self.members if member["id"] in payload["assignees"]],
+            "description_html": payload.get("description_html", ""),
+            "state": next((deepcopy(item) for item in self.states if item["id"] == state_id), {"id": state_id, "name": "Triage"}),
+            "priority": payload.get("priority"),
+            "labels": [label for label in self.labels if label["id"] in label_ids],
+            "assignees": [member for member in self.members if member["id"] in assignee_ids],
             "updated_at": "2026-03-11T01:00:00+00:00",
         }
         self.work_items[ticket["identifier"]] = ticket
@@ -206,13 +210,19 @@ class FakePlaneClient:
     async def update_work_item(self, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         self.updated_payloads.append({"work_item_id": work_item_id, "payload": deepcopy(payload)})
         ticket = next(item for item in self.work_items.values() if item["id"] == work_item_id)
+        if "name" in payload:
+            ticket["name"] = payload["name"]
         if "description_html" in payload:
             ticket["description_html"] = payload["description_html"]
         if "state" in payload:
             state = next(item for item in self.states if item["id"] == payload["state"])
             ticket["state"] = deepcopy(state)
+        if "priority" in payload:
+            ticket["priority"] = payload["priority"]
         if "labels" in payload:
             ticket["labels"] = [label for label in self.labels if label["id"] in payload["labels"]]
+        if "assignees" in payload:
+            ticket["assignees"] = [member for member in self.members if member["id"] in payload["assignees"]]
         ticket["updated_at"] = "2026-03-11T02:00:00+00:00"
         return deepcopy(ticket)
 
@@ -242,6 +252,13 @@ def fake_plane_client() -> FakePlaneClient:
 @pytest.fixture
 def client(fake_plane_client: FakePlaneClient) -> TestClient:
     registry = TemplateRegistry(ROOT_DIR / "templates")
+    settings = Settings(
+        plane_base_url="https://plane.example.com",
+        plane_workspace_slug="my-workspace",
+        plane_project_id="project-uuid",
+        plane_api_key="plane_api_xxx",
+        enforce_transition_policy=False,
+    )
     transition_policy = {
         "New": ["Triage"],
         "Triage": ["In Progress", "Waiting Customer", "Ready to Reply", "Resolved"],
@@ -251,6 +268,7 @@ def client(fake_plane_client: FakePlaneClient) -> TestClient:
         "Resolved": ["Closed", "In Progress"],
         "Closed": ["In Progress"],
     }
+    app.dependency_overrides[get_app_settings] = lambda: settings
     app.dependency_overrides[get_plane_client] = lambda: fake_plane_client
     app.dependency_overrides[get_template_registry] = lambda: registry
     app.dependency_overrides[get_transition_policy] = lambda: transition_policy

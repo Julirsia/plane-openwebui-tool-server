@@ -19,6 +19,7 @@ class Settings(BaseModel):
     context_cache_ttl_seconds: int = 60
     default_comment_limit: int = 30
     default_activity_limit: int = 30
+    enforce_transition_policy: bool = False
     log_level: str = "INFO"
     root_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parent.parent)
 
@@ -51,6 +52,7 @@ def get_settings() -> Settings:
         context_cache_ttl_seconds=int(_env("CONTEXT_CACHE_TTL_SECONDS", "60")),
         default_comment_limit=int(_env("DEFAULT_COMMENT_LIMIT", "30")),
         default_activity_limit=int(_env("DEFAULT_ACTIVITY_LIMIT", "30")),
+        enforce_transition_policy=_env("ENFORCE_TRANSITION_POLICY", "false").lower() == "true",
         log_level=_env("LOG_LEVEL", "INFO"),
     )
     logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))

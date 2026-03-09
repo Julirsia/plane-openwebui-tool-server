@@ -1,6 +1,6 @@
 # Internal Server Setup
 
-이 문서는 사내 서버에 이 레포를 clone 해서 Plane + OpenWebUI용 tool server를 올리는 절차입니다.
+이 문서는 사내 서버에 이 레포를 clone 해서 Plane + OpenWebUI용 thin adapter server를 올리는 절차입니다.
 
 ## 1. 서버에 레포 clone
 
@@ -41,6 +41,7 @@ cp .env.example .env
 | `CONTEXT_CACHE_TTL_SECONDS` | state/label/member 캐시 TTL | `60` |
 | `DEFAULT_COMMENT_LIMIT` | 기본 note 조회 수 | `30` |
 | `DEFAULT_ACTIVITY_LIMIT` | 기본 activity 조회 수 | `30` |
+| `ENFORCE_TRANSITION_POLICY` | optional transition guard 사용 여부 | `false` |
 | `LOG_LEVEL` | 로그 레벨 | `INFO` |
 
 예시:
@@ -55,6 +56,7 @@ DEFAULT_TIMEZONE=Asia/Seoul
 CONTEXT_CACHE_TTL_SECONDS=60
 DEFAULT_COMMENT_LIMIT=30
 DEFAULT_ACTIVITY_LIMIT=30
+ENFORCE_TRANSITION_POLICY=false
 LOG_LEVEL=INFO
 ```
 
@@ -62,7 +64,7 @@ LOG_LEVEL=INFO
 
 ## 3-1. Plane API scope 가정
 
-이 서버는 Plane 공식 work item 문서 기준으로 endpoint scope 를 나눕니다.
+이 서버는 Plane 공식 work item 문서 기준으로 endpoint scope 를 나눕니다. 내부 로직은 가능한 한 thin adapter 로 유지됩니다.
 
 - workspace-scoped:
   - readable identifier 로 티켓 조회
@@ -113,8 +115,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 이유:
 
-- v1은 `search -> context -> upsert/transition` 흐름을 강하게 가정합니다.
-- 다른 tool 이 섞이면 triage/query 흐름보다 웹검색이나 메모에 우선순위를 빼앗길 수 있습니다.
+- 이 서버는 `search -> context -> update/comment/transition` 흐름을 중심으로 동작합니다.
+- 다른 tool 이 섞이면 Plane 데이터보다 웹검색이나 메모에 우선순위를 빼앗길 수 있습니다.
 
 ## 7. system prompt 적용
 
@@ -130,9 +132,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 - 내부 전용 시스템입니다. 고객은 Plane/OpenWebUI에 접근하지 않습니다.
 - 이메일은 draft만 생성합니다. 자동 발송하지 않습니다.
-- write 전에는 항상 `tickets/search` 또는 `tickets/{identifier}/context`를 먼저 읽어야 합니다.
+- write 전에는 항상 `tickets/search` 또는 `tickets/{identifier}/context`를 먼저 읽는 것을 권장합니다.
 - `expected_updated_at`이 맞지 않으면 서버가 409로 막습니다. 이 경우 context를 다시 읽고 재시도해야 합니다.
-- `editable_sections`는 템플릿 YAML 외부 정의를 따릅니다. 허용되지 않은 section은 400으로 거부됩니다.
+- `editable_sections`와 템플릿 정보는 optional metadata 입니다.
 - API key 는 shared service token 이므로 Plane의 최종 감사 주체는 서비스 계정입니다. `operator_name`이 내부 note 에 남습니다.
 - 기존 Plane 티켓에 canonical `ticket_meta`가 없어도 읽기는 가능합니다. 이 경우 서버가 legacy fallback으로 context를 구성합니다.
 - legacy 티켓을 `upsert-sections`로 처음 수정하면 서버가 canonical section HTML로 자동 승격합니다.

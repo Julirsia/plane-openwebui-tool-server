@@ -17,20 +17,12 @@ def test_search_uses_limit_offset_and_expand(client, fake_plane_client) -> None:
     }
 
 
-def test_context_exposes_editable_sections(client) -> None:
-    response = client.get("/tickets/SUP-214/context")
-    assert response.status_code == 200
-    body = response.json()
-    assert "current_summary" in body["editable_sections"]
-    assert body["write_guard"]["expected_updated_at"] == "2026-03-09T01:00:00+00:00"
-    assert client is not None
-
-
-def test_context_supports_legacy_ticket_without_ticket_meta(client) -> None:
+def test_context_returns_rawish_detail_for_legacy_ticket(client) -> None:
     response = client.get("/tickets/SOFT-170/context")
     assert response.status_code == 200
     body = response.json()
-    assert body["ticket"]["template_id"] == "support.troubleshooting"
+    assert body["ticket"]["inferred_template_id"] == "support.troubleshooting"
     assert body["ticket"]["is_legacy_ticket"] is True
-    assert body["current_summary"] == "고객이 로그인 오류를 제보했습니다.\nSSO 설정 이후부터 발생했다고 합니다."
-    assert "current_summary" in body["editable_sections"]
+    assert body["description_text"] == "고객이 로그인 오류를 제보했습니다.\nSSO 설정 이후부터 발생했다고 합니다."
+    assert body["parsed_sections"] == {}
+    assert "current_summary" in body["sections"]
