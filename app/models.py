@@ -7,12 +7,15 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 from typing_extensions import Annotated
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+StateGroup = Literal["backlog", "unstarted", "started", "completed", "cancelled"]
 
 
 class StateItem(BaseModel):
     id: str
     name: str
-    key: Optional[str] = None
+    group: Optional[StateGroup] = None
+    is_default: bool = False
+    aliases: list[str] = Field(default_factory=list)
 
 
 class MemberItem(BaseModel):
@@ -36,7 +39,6 @@ class MetaContextResponse(BaseModel):
     states: list[StateItem]
     labels: list[LabelItem]
     members: list[MemberItem]
-    state_aliases: dict[str, list[str]]
     defaults: dict[str, Any]
     capabilities: dict[str, Any]
 
@@ -54,8 +56,9 @@ class TicketRefRequest(BaseModel):
 
 
 class SearchTicketsRequest(BaseModel):
-    state_names: list[str] = Field(default_factory=list)
-    state_ids: list[str] = Field(default_factory=list)
+    state_name: Optional[str] = None
+    state_id: Optional[str] = None
+    state_group: Optional[StateGroup] = None
     assignee_names: list[str] = Field(default_factory=list)
     assignee_ids: list[str] = Field(default_factory=list)
     label_names: list[str] = Field(default_factory=list)
@@ -79,7 +82,6 @@ class TicketSearchItem(BaseModel):
     title: str
     state_name: str
     state_id: str = ""
-    state_key: Optional[str] = None
     priority: Optional[str] = None
     assignee_names: list[str] = Field(default_factory=list)
     label_names: list[str] = Field(default_factory=list)
@@ -159,6 +161,7 @@ class CreateTicketRequest(BaseModel):
     description_text: Optional[str] = None
     state_name: Optional[str] = None
     state_id: Optional[str] = None
+    state_group: Optional[StateGroup] = None
     priority: Optional[str] = None
     label_names: list[str] = Field(default_factory=list)
     label_ids: list[str] = Field(default_factory=list)
@@ -175,9 +178,11 @@ class UpdateTicketRequest(TicketRefRequest):
     expected_updated_at: Optional[datetime] = None
     title: Optional[str] = None
     description_html: Optional[str] = None
-    description_text: Optional[str] = None
+    description_text_replace: Optional[str] = None
+    description_text_append: Optional[str] = None
     state_name: Optional[str] = None
     state_id: Optional[str] = None
+    state_group: Optional[StateGroup] = None
     priority: Optional[str] = None
     label_names: Optional[list[str]] = None
     label_ids: Optional[list[str]] = None
@@ -206,11 +211,12 @@ class TransitionTicketStateRequest(TicketRefRequest):
     expected_updated_at: Optional[datetime] = None
     to_state_name: Optional[str] = None
     to_state_id: Optional[str] = None
+    to_state_group: Optional[StateGroup] = None
 
     @model_validator(mode="after")
     def validate_target_state(self) -> "TransitionTicketStateRequest":
-        if not self.to_state_name and not self.to_state_id:
-            raise ValueError("Either to_state_name or to_state_id is required")
+        if not self.to_state_name and not self.to_state_id and not self.to_state_group:
+            raise ValueError("Either to_state_name, to_state_id, or to_state_group is required")
         return self
 
 

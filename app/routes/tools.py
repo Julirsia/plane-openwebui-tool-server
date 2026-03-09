@@ -42,11 +42,11 @@ from app.resolvers import (
     resolve_state_ids,
     resolve_ticket_ref,
     search_text,
-    state_aliases_response,
+    state_aliases_for_item,
+    state_group_value,
     state_id,
-    state_key_from_name,
-    state_key_from_ticket,
     state_name,
+    ticket_identifier,
     text_to_html,
     ticket_assignee_ids,
     ticket_assignee_names,
@@ -61,12 +61,21 @@ def _member_email(raw: dict[str, Any]) -> str | None:
     return raw.get("email") or raw.get("member", {}).get("email")
 
 
+def _state_name_by_id(states: list[dict[str, Any]], target_state_id: str) -> str:
+    for item in states:
+        if str(item.get("id")) == target_state_id:
+            return str(item.get("name", "") or "")
+    return ""
+
+
 def _state_items(states: list[dict[str, Any]]) -> list[StateItem]:
     return [
         StateItem(
             id=str(item["id"]),
             name=str(item["name"]),
-            key=state_key_from_name(str(item["name"])),
+            group=state_group_value(item),
+            is_default=bool(item.get("default", False)),
+            aliases=state_aliases_for_item(item),
         )
         for item in states
     ]
@@ -75,11 +84,10 @@ def _state_items(states: list[dict[str, Any]]) -> list[StateItem]:
 def _search_item(ticket: dict[str, Any]) -> TicketSearchItem:
     return TicketSearchItem(
         id=str(ticket["id"]),
-        identifier=str(ticket["identifier"]),
+        identifier=ticket_identifier(ticket),
         title=str(ticket.get("name", "")),
         state_name=state_name(ticket),
         state_id=state_id(ticket),
-        state_key=state_key_from_ticket(ticket),
         priority=ticket.get("priority"),
         assignee_names=ticket_assignee_names(ticket),
         label_names=ticket_label_names(ticket),
@@ -126,6 +134,7 @@ async def get_meta_context(
     plane_client=Depends(get_plane_client),
     settings: Settings = Depends(get_app_settings),
 ) -> MetaContextResponse:
+    await plane_client.probe_meta_access()
     project = await plane_client.get_project()
     states, labels, members = await _runtime_context(plane_client)
     return MetaContextResponse(
@@ -140,7 +149,6 @@ async def get_meta_context(
             )
             for item in members
         ],
-        state_aliases=state_aliases_response(),
         defaults={
             "comment_access": settings.default_comment_access,
             "comment_limit": settings.default_comment_limit,
@@ -148,7 +156,17 @@ async def get_meta_context(
         },
         capabilities={
             "ticket_ref_inputs": ["identifier", "id"],
-            "write_fields": ["title", "description_html", "priority", "state", "labels", "assignees"],
+            "state_inputs": ["state_id", "state_name", "state_group"],
+            "write_fields": [
+                "title",
+                "description_html",
+                "description_text_replace",
+                "description_text_append",
+                "priority",
+                "state",
+                "labels",
+                "assignees",
+            ],
             "reads_are_rawish": True,
         },
     )
@@ -158,15 +176,14 @@ async def get_meta_context(
 async def search_tickets(
     payload: SearchTicketsRequest,
     plane_client=Depends(get_plane_client),
-    settings: Settings = Depends(get_app_settings),
 ) -> SearchTicketsResponse:
     states = await plane_client.list_states()
     labels = await plane_client.list_labels() if payload.label_names else []
     members = await plane_client.list_project_members() if payload.assignee_names else []
     resolved_state_ids = resolve_state_ids(
-        state_names=payload.state_names,
-        state_ids=payload.state_ids,
-        settings=settings,
+        state_name=payload.state_name,
+        state_id_input=payload.state_id,
+        state_group_input=payload.state_group,
         runtime_states=states,
     )
     resolved_label_ids = resolve_label_ids(
@@ -180,8 +197,6 @@ async def search_tickets(
         runtime_members=members,
     ) or []
 
-    api_state_filter = resolved_state_ids[0] if len(resolved_state_ids) == 1 else None
-    api_assignee_filter = resolved_assignee_ids[0] if len(resolved_assignee_ids) == 1 else None
     matched: list[TicketSearchItem] = []
     offset = 0
     batch_size = max(payload.limit * 2, 25)
@@ -189,8 +204,8 @@ async def search_tickets(
         response = await plane_client.list_work_items(
             limit=batch_size,
             offset=offset,
-            state_id=api_state_filter,
-            assignee_id=api_assignee_filter,
+            state_id=None,
+            assignee_id=None,
         )
         results = response.get("results", response if isinstance(response, list) else [])
         if not results:
@@ -265,7 +280,6 @@ async def get_ticket_activities(
 async def create_ticket(
     payload: CreateTicketRequest,
     plane_client=Depends(get_plane_client),
-    settings: Settings = Depends(get_app_settings),
 ) -> CreateTicketResponse:
     states, labels, members = await _runtime_context(plane_client)
     create_payload: dict[str, Any] = {"name": payload.title[:90]}
@@ -277,7 +291,7 @@ async def create_ticket(
     state_value = resolve_state_id(
         state_name_input=payload.state_name,
         state_id_input=payload.state_id,
-        settings=settings,
+        state_group_input=payload.state_group,
         runtime_states=states,
     )
     if state_value:
@@ -300,7 +314,6 @@ async def create_ticket(
 async def update_ticket(
     payload: UpdateTicketRequest,
     plane_client=Depends(get_plane_client),
-    settings: Settings = Depends(get_app_settings),
 ) -> UpdateTicketResponse:
     ticket, _ = await resolve_ticket_ref(
         plane_client=plane_client,
@@ -311,20 +324,43 @@ async def update_ticket(
     states, labels, members = await _runtime_context(plane_client)
     patch_payload: dict[str, Any] = {}
     applied_fields: list[str] = []
+    description_field_count = sum(
+        [
+            payload.description_html is not None,
+            payload.description_text_replace is not None,
+            payload.description_text_append is not None,
+        ]
+    )
+    if description_field_count > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide only one of description_html, description_text_replace, or description_text_append",
+        )
     if payload.title is not None:
         patch_payload["name"] = payload.title[:90]
         applied_fields.append("title")
-    description_html = payload.description_html or (text_to_html(payload.description_text) if payload.description_text else None)
-    if description_html is not None:
-        patch_payload["description_html"] = description_html
+    if payload.description_html is not None:
+        patch_payload["description_html"] = payload.description_html
         applied_fields.append("description_html")
+    elif payload.description_text_replace is not None:
+        patch_payload["description_html"] = text_to_html(payload.description_text_replace)
+        applied_fields.append("description_text_replace")
+    elif payload.description_text_append is not None:
+        existing_text = html_to_text(str(ticket.get("description_html", "") or ""))
+        combined_text = (
+            f"{existing_text}\n\n{payload.description_text_append}".strip()
+            if existing_text
+            else payload.description_text_append
+        )
+        patch_payload["description_html"] = text_to_html(combined_text)
+        applied_fields.append("description_text_append")
     if payload.priority is not None:
         patch_payload["priority"] = payload.priority
         applied_fields.append("priority")
     state_value = resolve_state_id(
         state_name_input=payload.state_name,
         state_id_input=payload.state_id,
-        settings=settings,
+        state_group_input=payload.state_group,
         runtime_states=states,
     )
     if state_value is not None:
@@ -372,7 +408,6 @@ async def add_ticket_comment(
 async def transition_ticket_state(
     payload: TransitionTicketStateRequest,
     plane_client=Depends(get_plane_client),
-    settings: Settings = Depends(get_app_settings),
 ) -> TransitionTicketStateResponse:
     ticket, _ = await resolve_ticket_ref(
         plane_client=plane_client,
@@ -384,7 +419,7 @@ async def transition_ticket_state(
     target_state_id = resolve_state_id(
         state_name_input=payload.to_state_name,
         state_id_input=payload.to_state_id,
-        settings=settings,
+        state_group_input=payload.to_state_group,
         runtime_states=states,
     )
     updated_ticket = await plane_client.update_work_item(ticket["id"], {"state": target_state_id})
@@ -392,6 +427,6 @@ async def transition_ticket_state(
     return TransitionTicketStateResponse(
         ticket=updated_ticket,
         from_state_name=state_name(ticket),
-        to_state_name=state_name(updated_ticket),
+        to_state_name=state_name(updated_ticket) or _state_name_by_id(states, target_state_id),
         updated_at=updated_at,
     )

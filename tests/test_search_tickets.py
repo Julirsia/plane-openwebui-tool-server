@@ -1,5 +1,5 @@
 def test_search_tickets_uses_state_id_filter_when_state_name_is_provided(client, fake_plane_client) -> None:
-    response = client.post("/tools/search_tickets", json={"state_names": ["triage"], "limit": 10})
+    response = client.post("/tools/search_tickets", json={"state_name": "Intake", "limit": 10})
 
     assert response.status_code == 200
     body = response.json()
@@ -7,8 +7,8 @@ def test_search_tickets_uses_state_id_filter_when_state_name_is_provided(client,
     assert fake_plane_client.list_work_items_calls[0] == {
         "limit": 25,
         "offset": 0,
-        "expand": "labels,assignees,state",
-        "state": "state-triage",
+        "expand": "labels,assignees,state,project",
+        "state": None,
         "assignee": None,
     }
 
@@ -21,3 +21,10 @@ def test_search_tickets_sorts_by_updated_at_desc_and_has_more(client) -> None:
     assert body["sort"] == "updated_at:desc"
     assert body["has_more"] is True
     assert body["items"][0]["identifier"] == "SUP-215"
+
+
+def test_search_tickets_filters_by_state_group_even_if_api_filter_is_only_a_hint(client) -> None:
+    response = client.post("/tools/search_tickets", json={"state_group": "completed", "limit": 10})
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []

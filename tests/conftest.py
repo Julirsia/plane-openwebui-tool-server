@@ -22,12 +22,12 @@ class FakePlaneClient:
     def __init__(self) -> None:
         self.project = {"id": "project-1", "name": "Support", "identifier": "SUP"}
         self.states = [
-            {"id": "state-triage", "name": "Triage"},
-            {"id": "state-progress", "name": "In Progress"},
-            {"id": "state-waiting", "name": "Waiting Customer"},
-            {"id": "state-ready", "name": "Ready to Reply"},
-            {"id": "state-resolved", "name": "Resolved"},
-            {"id": "state-closed", "name": "Closed"},
+            {"id": "state-backlog", "name": "Intake", "group": "backlog", "default": True},
+            {"id": "state-ready", "name": "Ready", "group": "unstarted", "default": False},
+            {"id": "state-progress", "name": "Working", "group": "started", "default": False},
+            {"id": "state-qa", "name": "Waiting QA", "group": "started", "default": False},
+            {"id": "state-done", "name": "Shipped", "group": "completed", "default": False},
+            {"id": "state-cancelled", "name": "Dropped", "group": "cancelled", "default": False},
         ]
         self.labels = [
             {"id": "label-auth", "name": "product:auth", "color": "#ff0000"},
@@ -44,7 +44,7 @@ class FakePlaneClient:
                 "identifier": "SUP-214",
                 "name": "로그인 루프",
                 "description_html": "<p>SSO 고객에서 로그인 루프가 보고되었습니다.</p><p>추가 로그 확인이 필요합니다.</p>",
-                "state": {"id": "state-triage", "name": "Triage"},
+                "state": {"id": "state-backlog", "name": "Intake", "group": "backlog"},
                 "priority": "high",
                 "labels": [self._label("product:auth"), self._label("queue:triage")],
                 "assignees": [self._member("김철수")],
@@ -55,7 +55,7 @@ class FakePlaneClient:
                 "identifier": "SUP-215",
                 "name": "대시보드 지연",
                 "description_html": "<p>관리자 대시보드 로딩이 느립니다.</p>",
-                "state": {"id": "state-progress", "name": "In Progress"},
+                "state": {"id": "state-progress", "name": "Working", "group": "started"},
                 "priority": "medium",
                 "labels": [self._label("product:auth")],
                 "assignees": [self._member("홍길동")],
@@ -66,7 +66,7 @@ class FakePlaneClient:
                 "identifier": "SOFT-170",
                 "name": "기존 티켓 포맷 로그인 오류",
                 "description_html": "<p>고객이 로그인 오류를 제보했습니다.</p><p>SSO 설정 이후부터 발생했다고 합니다.</p>",
-                "state": {"id": "state-progress", "name": "In Progress"},
+                "state": {"id": "state-qa", "name": "Waiting QA", "group": "started"},
                 "priority": "high",
                 "labels": [self._label("product:auth")],
                 "assignees": [self._member("홍길동")],
@@ -94,7 +94,7 @@ class FakePlaneClient:
                     "verb": "updated",
                     "field": "state",
                     "old_value": "New",
-                    "new_value": "Triage",
+                    "new_value": "Intake",
                 }
             ],
             "wi-215": [],
@@ -115,6 +115,9 @@ class FakePlaneClient:
 
     async def close(self) -> None:
         return None
+
+    async def probe_meta_access(self) -> dict[str, Any]:
+        return {"ok": True, "counts": {"states": len(self.states), "labels": len(self.labels), "members": len(self.members)}}
 
     async def get_project(self) -> dict[str, Any]:
         return deepcopy(self.project)
@@ -140,7 +143,7 @@ class FakePlaneClient:
             {
                 "limit": limit,
                 "offset": offset,
-                "expand": "labels,assignees,state",
+                "expand": "labels,assignees,state,project",
                 "state": state_id,
                 "assignee": assignee_id,
             }
@@ -155,7 +158,7 @@ class FakePlaneClient:
 
     async def create_work_item(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.created_tickets.append(deepcopy(payload))
-        state_id = payload.get("state", "state-triage")
+        state_id = payload.get("state", "state-backlog")
         label_ids = payload.get("labels", [])
         assignee_ids = payload.get("assignees", [])
         ticket = {
@@ -226,7 +229,8 @@ def fake_plane_client() -> FakePlaneClient:
 @pytest.fixture
 def client(fake_plane_client: FakePlaneClient) -> TestClient:
     settings = Settings(
-        plane_base_url="https://plane.example.com",
+        plane_api_base_url="https://plane.example.com",
+        plane_workspace_url=None,
         plane_workspace_slug="my-workspace",
         plane_project_id="project-uuid",
         plane_api_key="plane_api_xxx",
@@ -235,12 +239,7 @@ def client(fake_plane_client: FakePlaneClient) -> TestClient:
         default_activity_limit=30,
         meta_cache_ttl_seconds=60,
         request_timeout_seconds=20,
-        plane_state_id_triage="state-triage",
-        plane_state_id_in_progress="state-progress",
-        plane_state_id_waiting_customer="state-waiting",
-        plane_state_id_ready_to_reply="state-ready",
-        plane_state_id_resolved="state-resolved",
-        plane_state_id_closed="state-closed",
+        log_level="INFO",
     )
     app.dependency_overrides[get_app_settings] = lambda: settings
     app.dependency_overrides[get_plane_client] = lambda: fake_plane_client

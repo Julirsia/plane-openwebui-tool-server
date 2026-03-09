@@ -9,56 +9,89 @@ from bs4 import BeautifulSoup
 from fastapi import HTTPException
 from markdown_it import MarkdownIt
 
-from app.config import Settings
+from app.models import StateGroup
 
 md = MarkdownIt("commonmark", {"breaks": True})
-
-STATE_ALIASES: dict[str, tuple[str, ...]] = {
-    "triage": ("triage",),
-    "in_progress": ("in progress", "in_progress", "in-progress", "wip"),
-    "waiting_customer": ("waiting customer", "waiting_customer", "waiting-customer"),
-    "ready_to_reply": ("ready to reply", "ready_to_reply", "ready-to-reply"),
-    "resolved": ("resolved",),
-    "closed": ("closed",),
-}
+ALLOWED_STATE_GROUPS: tuple[StateGroup, ...] = ("backlog", "unstarted", "started", "completed", "cancelled")
 
 
 def normalize_name(value: str) -> str:
     return re.sub(r"[\s_-]+", " ", value.strip().lower())
 
 
-def state_aliases_response() -> dict[str, list[str]]:
-    return {key: list(values) for key, values in STATE_ALIASES.items()}
-
-
-def state_key_from_name(state_name: str) -> str | None:
-    normalized = normalize_name(state_name)
-    for key, aliases in STATE_ALIASES.items():
-        if normalized in {normalize_name(alias) for alias in aliases}:
-            return key
+def state_group_value(raw: dict[str, Any]) -> StateGroup | None:
+    group = raw.get("group")
+    if group in ALLOWED_STATE_GROUPS:
+        return group
     return None
 
 
-def state_key_from_ticket(ticket: dict[str, Any]) -> str | None:
-    return state_key_from_name(state_name(ticket))
+def state_aliases_for_item(raw: dict[str, Any]) -> list[str]:
+    state_name_value = str(raw.get("name", "") or "").strip()
+    if not state_name_value:
+        return []
+    normalized = normalize_name(state_name_value)
+    aliases = [
+        state_name_value,
+        state_name_value.lower(),
+        normalized,
+        normalized.replace(" ", "_"),
+        normalized.replace(" ", "-"),
+    ]
+    seen: set[str] = set()
+    unique_aliases: list[str] = []
+    for alias in aliases:
+        if alias and alias not in seen:
+            seen.add(alias)
+            unique_aliases.append(alias)
+    return unique_aliases
 
 
 def state_name(ticket: dict[str, Any]) -> str:
     raw_state = ticket.get("state")
     if isinstance(raw_state, dict):
-        return raw_state.get("name", "")
+        return str(raw_state.get("name", "") or "")
     return str(ticket.get("state_name", "") or "")
 
 
 def state_id(ticket: dict[str, Any]) -> str:
     raw_state = ticket.get("state")
     if isinstance(raw_state, dict):
-        return raw_state.get("id", "")
+        return str(raw_state.get("id", "") or "")
     return str(ticket.get("state_id", "") or "")
 
 
+def state_group(ticket: dict[str, Any]) -> StateGroup | None:
+    raw_state = ticket.get("state")
+    if isinstance(raw_state, dict):
+        return state_group_value(raw_state)
+    group = ticket.get("state_group")
+    if group in ALLOWED_STATE_GROUPS:
+        return group
+    return None
+
+
+def ticket_identifier(ticket: dict[str, Any]) -> str:
+    if ticket.get("identifier"):
+        return str(ticket["identifier"])
+    project = ticket.get("project")
+    project_identifier = ""
+    if isinstance(project, dict):
+        project_identifier = str(project.get("identifier", "") or "")
+    sequence_id = ticket.get("sequence_id")
+    if project_identifier and sequence_id is not None:
+        return f"{project_identifier}-{sequence_id}"
+    return ""
+
+
 def member_display_name(raw: dict[str, Any]) -> str:
-    return str(raw.get("display_name") or raw.get("member", {}).get("display_name", "") or "")
+    return str(
+        raw.get("display_name")
+        or raw.get("member", {}).get("display_name", "")
+        or " ".join(part for part in [raw.get("first_name"), raw.get("last_name")] if part).strip()
+        or raw.get("email", "")
+        or ""
+    )
 
 
 def label_name(raw: dict[str, Any]) -> str:
@@ -132,44 +165,94 @@ def member_name_map(items: list[dict[str, Any]]) -> dict[str, str]:
     return mapping
 
 
+def _state_candidates_for_group(runtime_states: list[dict[str, Any]], target_group: StateGroup) -> list[dict[str, Any]]:
+    return [item for item in runtime_states if state_group_value(item) == target_group]
+
+
+def _state_candidates_for_name(runtime_states: list[dict[str, Any]], raw_name: str) -> list[dict[str, Any]]:
+    exact = [item for item in runtime_states if str(item.get("name", "")) == raw_name]
+    if exact:
+        return exact
+    normalized = normalize_name(raw_name)
+    matches: list[dict[str, Any]] = []
+    for item in runtime_states:
+        if normalized in {normalize_name(alias) for alias in state_aliases_for_item(item)}:
+            matches.append(item)
+    return matches
+
+
+def _state_candidate_summary(items: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {
+            "id": str(item.get("id", "")),
+            "name": str(item.get("name", "")),
+            "group": str(item.get("group", "")),
+        }
+        for item in items
+    ]
+
+
 def resolve_state_id(
     *,
     state_name_input: str | None,
     state_id_input: str | None,
-    settings: Settings,
+    state_group_input: StateGroup | None,
     runtime_states: list[dict[str, Any]],
 ) -> str | None:
     if state_id_input:
         return state_id_input
-    if not state_name_input:
-        return None
-    if state_key := state_key_from_name(state_name_input):
-        return settings.state_id_mapping[state_key]
-    runtime_map = exact_name_map(runtime_states)
-    if resolved := runtime_map.get(state_name_input):
-        return resolved
-    allowed = ", ".join(sorted(settings.state_id_mapping))
-    raise HTTPException(status_code=400, detail=f"Unknown state name: {state_name_input}. Allowed keys: {allowed}")
+    if state_name_input:
+        candidates = _state_candidates_for_name(runtime_states, state_name_input)
+        if len(candidates) == 1:
+            return str(candidates[0]["id"])
+        if len(candidates) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": f"Ambiguous state name: {state_name_input}",
+                    "candidates": _state_candidate_summary(candidates),
+                },
+            )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": f"Unknown state name: {state_name_input}",
+                "available_states": _state_candidate_summary(runtime_states),
+            },
+        )
+    if state_group_input:
+        candidates = _state_candidates_for_group(runtime_states, state_group_input)
+        if len(candidates) == 1:
+            return str(candidates[0]["id"])
+        if len(candidates) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": f"State group '{state_group_input}' is ambiguous in this project.",
+                    "candidates": _state_candidate_summary(candidates),
+                },
+            )
+        raise HTTPException(
+            status_code=400,
+            detail={"message": f"Unknown state group: {state_group_input}", "available_groups": list(ALLOWED_STATE_GROUPS)},
+        )
+    return None
 
 
 def resolve_state_ids(
     *,
-    state_names: list[str],
-    state_ids: list[str],
-    settings: Settings,
+    state_name: str | None,
+    state_id_input: str | None,
+    state_group_input: StateGroup | None,
     runtime_states: list[dict[str, Any]],
 ) -> list[str]:
-    resolved = list(state_ids)
-    for item in state_names:
-        resolved_id = resolve_state_id(
-            state_name_input=item,
-            state_id_input=None,
-            settings=settings,
-            runtime_states=runtime_states,
-        )
-        if resolved_id and resolved_id not in resolved:
-            resolved.append(resolved_id)
-    return resolved
+    resolved = resolve_state_id(
+        state_name_input=state_name,
+        state_id_input=state_id_input,
+        state_group_input=state_group_input,
+        runtime_states=runtime_states,
+    )
+    return [resolved] if resolved else []
 
 
 def resolve_label_ids(
@@ -218,17 +301,18 @@ async def resolve_ticket_ref(
 ) -> tuple[dict[str, Any], dict[str, str]]:
     if work_item_id:
         ticket = await plane_client.get_work_item_by_id(work_item_id)
-        if identifier and ticket.get("identifier") != identifier:
+        resolved_identifier = ticket_identifier(ticket)
+        if identifier and resolved_identifier != identifier:
             raise HTTPException(status_code=400, detail="Provided identifier does not match the provided id")
-        return ticket, {"id": str(ticket["id"]), "identifier": str(ticket["identifier"]), "ref_type": "id"}
+        return ticket, {"id": str(ticket["id"]), "identifier": resolved_identifier, "ref_type": "id"}
     ticket = await plane_client.get_work_item_by_identifier(str(identifier))
-    return ticket, {"id": str(ticket["id"]), "identifier": str(ticket["identifier"]), "ref_type": "identifier"}
+    return ticket, {"id": str(ticket["id"]), "identifier": ticket_identifier(ticket), "ref_type": "identifier"}
 
 
 def search_text(ticket: dict[str, Any]) -> str:
     return " ".join(
         [
-            str(ticket.get("identifier", "") or ""),
+            ticket_identifier(ticket),
             str(ticket.get("name", "") or ""),
             html_to_text(str(ticket.get("description_html", "") or "")),
         ]
@@ -236,4 +320,5 @@ def search_text(ticket: dict[str, Any]) -> str:
 
 
 def description_excerpt(ticket: dict[str, Any], limit: int = 240) -> str:
-    return html_to_text(str(ticket.get("description_html", "") or ""))[:limit]
+    raw_text = html_to_text(str(ticket.get("description_html", "") or ""))
+    return raw_text[:limit]
