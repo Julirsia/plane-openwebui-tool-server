@@ -108,12 +108,23 @@ Plane 최종 request body는 반드시 아래 key를 사용합니다.
 2. `prompts/openwebui_system_prompt.txt`를 system prompt로 사용합니다.
 3. labels / assignees 선택 전에는 `get_meta_context`를 먼저 호출합니다.
 4. write 전에는 `search_tickets` 또는 `get_ticket`을 먼저 호출합니다.
+5. self-hosted Plane 실서버 검증 절차는 `docs/SELF_HOSTED_SMOKE_TEST.md`를 따릅니다.
 
 ```bash
 PYTHONPATH=. .venv/bin/pytest
 ```
 
 테스트는 fake Plane client로 동작하므로 외부 Plane 서버 없이 API 표면과 정책 로직을 검증합니다.
+
+## 실서버 검증
+
+- OpenWebUI + 소형 모델 + 사내용 `.env` 조합으로 실제 동작 여부를 점검하려면:
+  - `docs/SELF_HOSTED_SMOKE_TEST.md`
+- 이 문서에는:
+  - 권장 테스트 순서
+  - 실패 시 수집할 로그/에러 정보
+  - 저에게 다시 전달할 디버깅 템플릿
+  이 포함되어 있습니다.
 
 ## 제한사항
 
