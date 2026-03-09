@@ -16,6 +16,9 @@ def test_save_email_draft_creates_internal_comment(client, fake_plane_client) ->
     payload = fake_plane_client.created_comment_payloads[-1]["payload"]
     assert payload["access"] == "INTERNAL"
     assert "[EMAIL_DRAFT][progress_update][by:홍길동]" in payload["comment_html"]
+    assert fake_plane_client.updated_payloads[-1]["work_item_id"] == "wi-214"
+    assert "labels" in fake_plane_client.updated_payloads[-1]["payload"]
+    assert "label_ids" not in fake_plane_client.updated_payloads[-1]["payload"]
 
 
 def test_save_email_draft_rejects_unknown_label(client) -> None:

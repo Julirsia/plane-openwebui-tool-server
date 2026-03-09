@@ -159,20 +159,20 @@ async def search_tickets(
     transition_policy=Depends(get_transition_policy),
 ) -> SearchTicketsResponse:
     matched: list[TicketSearchItem] = []
-    page = 1
-    page_size = max(payload.limit * 2, 25)
+    offset = 0
+    batch_size = max(payload.limit * 2, 25)
     while len(matched) < payload.limit + 1:
-        response = await plane_client.list_work_items(page=page, page_size=page_size)
-        results = response.get("results", [])
+        response = await plane_client.list_work_items(limit=batch_size, offset=offset)
+        results = response.get("results", response if isinstance(response, list) else [])
         if not results:
             break
         for ticket in results:
             sections = parse_ticket_sections(ticket.get("description_html", ""))
             if _search_match(ticket, sections, payload):
                 matched.append(_search_item(ticket, sections, transition_policy))
-        if not response.get("next"):
+        if len(results) < batch_size:
             break
-        page += 1
+        offset += batch_size
     matched.sort(key=lambda item: item.updated_at or datetime.min, reverse=True)
     has_more = len(matched) > payload.limit
     return SearchTicketsResponse(items=matched[: payload.limit], applied_filters=payload, has_more=has_more)
@@ -200,9 +200,9 @@ async def create_ticket(
     ticket_payload = {
         "name": title,
         "description_html": description_html,
-        "state_id": resolved["state_id"],
-        "label_ids": resolved["label_ids"],
-        "assignee_ids": resolved["assignee_ids"],
+        "state": resolved["state"],
+        "labels": resolved["labels"],
+        "assignees": resolved["assignees"],
         "priority": normalized_attributes["priority"],
     }
     ticket = await plane_client.create_work_item(ticket_payload)
@@ -310,7 +310,7 @@ async def upsert_sections(
         merged_meta["ticket_meta"] = "\n".join(lines)
     order = ["ticket_meta"] + template["required_sections"] + template.get("optional_sections", [])
     updated_html = upsert_ticket_sections(ticket.get("description_html", ""), merged_meta, order)
-    updated_ticket = await plane_client.update_work_item(identifier, {"description_html": updated_html})
+    updated_ticket = await plane_client.update_work_item(ticket["id"], {"description_html": updated_html})
     note_created = False
     if payload.append_note:
         work_item_id = ticket["id"]
@@ -343,7 +343,7 @@ async def transition_ticket(
     validate_state_transition(transition_policy, current_state_name, payload.to_state_name)
     states = await plane_client.list_states()
     state_ids = {item["name"]: item["id"] for item in states}
-    updated_ticket = await plane_client.update_work_item(identifier, {"state_id": state_ids[payload.to_state_name]})
+    updated_ticket = await plane_client.update_work_item(ticket["id"], {"state": state_ids[payload.to_state_name]})
     note_created = False
     if payload.append_note:
         comment_html = _build_note_html(
@@ -380,7 +380,7 @@ async def save_email_draft(
         label_names = replace_comm_label(label_names, payload.mark_comm_label)
         applied_comm_label = payload.mark_comm_label
         label_ids = [context_maps["label_names_to_ids"][name] for name in label_names]
-        ticket = await plane_client.update_work_item(identifier, {"label_ids": label_ids})
+        ticket = await plane_client.update_work_item(ticket["id"], {"labels": label_ids})
     body_html = (
         f"<p><strong>[EMAIL_DRAFT][{escape(payload.draft_type)}][by:{escape(payload.operator_name)}]</strong></p>"
         f"<p><strong>Subject:</strong> {escape(payload.subject)}</p>"

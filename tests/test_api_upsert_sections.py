@@ -17,6 +17,8 @@ def test_upsert_sections_updates_allowed_fields_and_adds_note(client, fake_plane
     assert body["updated_section_keys"] == ["current_summary", "confirmed_facts"]
     assert body["note_created"] is True
     assert fake_plane_client.created_comment_payloads[-1]["payload"]["access"] == "INTERNAL"
+    assert fake_plane_client.updated_payloads[-1]["work_item_id"] == "wi-214"
+    assert "description_html" in fake_plane_client.updated_payloads[-1]["payload"]
 
 
 def test_upsert_sections_rejects_unknown_section(client) -> None:

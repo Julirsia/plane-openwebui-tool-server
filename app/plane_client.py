@@ -17,12 +17,11 @@ logger = logging.getLogger(__name__)
 class PlaneClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.base_api_url = (
-            f"{str(settings.plane_base_url).rstrip('/')}/api/v1/workspaces/"
-            f"{settings.plane_workspace_slug}/projects/{settings.plane_project_id}"
+        self.workspace_api_url = (
+            f"{str(settings.plane_base_url).rstrip('/')}/api/v1/workspaces/{settings.plane_workspace_slug}"
         )
+        self.project_api_url = f"{self.workspace_api_url}/projects/{settings.plane_project_id}"
         self._client = httpx.AsyncClient(
-            base_url=self.base_api_url,
             headers={"x-api-key": settings.plane_api_key, "Accept": "application/json"},
             timeout=20.0,
         )
@@ -31,11 +30,17 @@ class PlaneClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+    def _workspace_endpoint(self, path: str) -> str:
+        return f"{self.workspace_api_url}{path}"
+
+    def _project_endpoint(self, path: str) -> str:
+        return f"{self.project_api_url}{path}"
+
+    async def _request(self, method: str, url: str, **kwargs: Any) -> Any:
         attempts = 0
         while True:
             attempts += 1
-            response = await self._client.request(method, path, **kwargs)
+            response = await self._client.request(method, url, **kwargs)
             if response.status_code in {429, 500, 502, 503, 504} and attempts < 4:
                 await asyncio.sleep(0.3 * (2 ** (attempts - 1)))
                 continue
@@ -46,7 +51,7 @@ class PlaneClient:
                     detail = body.get("detail") or body.get("message") or detail
                 except Exception:
                     pass
-                logger.warning("Plane API error status=%s path=%s", response.status_code, path)
+                logger.warning("Plane API error status=%s url=%s", response.status_code, url)
                 raise HTTPException(status_code=502, detail=f"Plane API error: {detail}")
             if response.status_code == 204:
                 return None
@@ -56,7 +61,7 @@ class PlaneClient:
         cache_key = "project"
         if cached := self._cache.get(cache_key):
             return cached
-        data = await self._request("GET", "")
+        data = await self._request("GET", self._project_endpoint("/"))
         self._cache.set(cache_key, data)
         return data
 
@@ -64,7 +69,7 @@ class PlaneClient:
         cache_key = "states"
         if cached := self._cache.get(cache_key):
             return cached["items"]
-        data = await self._request("GET", "/states/")
+        data = await self._request("GET", self._project_endpoint("/states/"))
         items = data.get("results", data if isinstance(data, list) else [])
         self._cache.set(cache_key, {"items": items})
         return items
@@ -73,7 +78,7 @@ class PlaneClient:
         cache_key = "labels"
         if cached := self._cache.get(cache_key):
             return cached["items"]
-        data = await self._request("GET", "/labels/")
+        data = await self._request("GET", self._project_endpoint("/labels/"))
         items = data.get("results", data if isinstance(data, list) else [])
         self._cache.set(cache_key, {"items": items})
         return items
@@ -82,33 +87,53 @@ class PlaneClient:
         cache_key = "members"
         if cached := self._cache.get(cache_key):
             return cached["items"]
-        data = await self._request("GET", "/members/")
+        data = await self._request("GET", self._project_endpoint("/members/"))
         items = data.get("results", data if isinstance(data, list) else [])
         self._cache.set(cache_key, {"items": items})
         return items
 
-    async def list_work_items(self, page: int = 1, page_size: int = 50) -> dict[str, Any]:
-        params = {"page": page, "page_size": page_size}
-        return await self._request("GET", "/work-items/", params=params)
+    async def list_work_items(self, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        params = {"limit": limit, "offset": offset, "expand": "labels,assignees,state"}
+        return await self._request("GET", self._project_endpoint("/work-items/"), params=params)
 
     async def create_work_item(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return await self._request("POST", "/work-items/", json=payload)
+        return await self._request("POST", self._project_endpoint("/work-items/"), json=payload)
 
     async def get_work_item_by_identifier(self, identifier: str) -> dict[str, Any]:
-        return await self._request("GET", f"/work-items/{identifier}/", params={"expand": "labels,assignees,state"})
+        params = {"expand": "labels,assignees,state,project"}
+        return await self._request("GET", self._workspace_endpoint(f"/work-items/{identifier}/"), params=params)
 
-    async def update_work_item(self, identifier: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return await self._request("PATCH", f"/work-items/{identifier}/", json=payload)
+    async def get_work_item_by_id(self, work_item_id: str) -> dict[str, Any]:
+        params = {"expand": "labels,assignees,state,project"}
+        return await self._request("GET", self._project_endpoint(f"/work-items/{work_item_id}/"), params=params)
+
+    async def update_work_item(self, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request("PATCH", self._project_endpoint(f"/work-items/{work_item_id}/"), json=payload)
 
     async def list_comments(self, work_item_id: str, limit: int) -> list[dict[str, Any]]:
-        data = await self._request("GET", f"/work-items/{work_item_id}/comments/", params={"page_size": limit})
+        # Assumption verified against Plane docs: comments remain project-scoped and use work_item_id UUID.
+        data = await self._request(
+            "GET",
+            self._project_endpoint(f"/work-items/{work_item_id}/comments/"),
+            params={"limit": limit, "offset": 0},
+        )
         return data.get("results", data if isinstance(data, list) else [])
 
     async def create_comment(self, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return await self._request("POST", f"/work-items/{work_item_id}/comments/", json=payload)
+        # Assumption verified against Plane docs: create comment remains project-scoped and accepts comment_html/access.
+        return await self._request(
+            "POST",
+            self._project_endpoint(f"/work-items/{work_item_id}/comments/"),
+            json=payload,
+        )
 
     async def list_activities(self, work_item_id: str, limit: int) -> list[dict[str, Any]]:
-        data = await self._request("GET", f"/work-items/{work_item_id}/activities/", params={"page_size": limit})
+        # Assumption verified against Plane docs: activities remain project-scoped and use work_item_id UUID.
+        data = await self._request(
+            "GET",
+            self._project_endpoint(f"/work-items/{work_item_id}/activities/"),
+            params={"limit": limit, "offset": 0},
+        )
         return data.get("results", data if isinstance(data, list) else [])
 
 

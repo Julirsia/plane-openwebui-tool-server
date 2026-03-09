@@ -140,6 +140,8 @@ class FakePlaneClient:
         self.created_comment_payloads: list[dict[str, Any]] = []
         self.updated_payloads: list[dict[str, Any]] = []
         self.created_tickets: list[dict[str, Any]] = []
+        self.identifier_lookup_calls: list[str] = []
+        self.list_work_items_calls: list[dict[str, Any]] = []
 
     def _label(self, name: str) -> dict[str, Any]:
         return next(item for item in self.labels if item["name"] == name)
@@ -162,11 +164,11 @@ class FakePlaneClient:
     async def list_project_members(self) -> list[dict[str, Any]]:
         return deepcopy(self.members)
 
-    async def list_work_items(self, page: int = 1, page_size: int = 50) -> dict[str, Any]:
+    async def list_work_items(self, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        self.list_work_items_calls.append({"limit": limit, "offset": offset, "expand": "labels,assignees,state"})
         items = sorted(self.work_items.values(), key=lambda item: item["updated_at"], reverse=True)
-        start = (page - 1) * page_size
-        end = start + page_size
-        return {"results": deepcopy(items[start:end]), "next": None if end >= len(items) else f"page={page+1}"}
+        end = offset + limit
+        return {"results": deepcopy(items[offset:end])}
 
     async def create_work_item(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.created_tickets.append(deepcopy(payload))
@@ -175,28 +177,29 @@ class FakePlaneClient:
             "identifier": "SUP-999",
             "name": payload["name"],
             "description_html": payload["description_html"],
-            "state": {"id": payload["state_id"], "name": "Triage"},
+            "state": {"id": payload["state"], "name": "Triage"},
             "priority": payload["priority"],
-            "labels": [label for label in self.labels if label["id"] in payload["label_ids"]],
-            "assignees": [member for member in self.members if member["id"] in payload["assignee_ids"]],
+            "labels": [label for label in self.labels if label["id"] in payload["labels"]],
+            "assignees": [member for member in self.members if member["id"] in payload["assignees"]],
             "updated_at": "2026-03-11T01:00:00+00:00",
         }
         self.work_items[ticket["identifier"]] = ticket
         return deepcopy(ticket)
 
     async def get_work_item_by_identifier(self, identifier: str) -> dict[str, Any]:
+        self.identifier_lookup_calls.append(identifier)
         return deepcopy(self.work_items[identifier])
 
-    async def update_work_item(self, identifier: str, payload: dict[str, Any]) -> dict[str, Any]:
-        self.updated_payloads.append({"identifier": identifier, "payload": deepcopy(payload)})
-        ticket = self.work_items[identifier]
+    async def update_work_item(self, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.updated_payloads.append({"work_item_id": work_item_id, "payload": deepcopy(payload)})
+        ticket = next(item for item in self.work_items.values() if item["id"] == work_item_id)
         if "description_html" in payload:
             ticket["description_html"] = payload["description_html"]
-        if "state_id" in payload:
-            state = next(item for item in self.states if item["id"] == payload["state_id"])
+        if "state" in payload:
+            state = next(item for item in self.states if item["id"] == payload["state"])
             ticket["state"] = deepcopy(state)
-        if "label_ids" in payload:
-            ticket["labels"] = [label for label in self.labels if label["id"] in payload["label_ids"]]
+        if "labels" in payload:
+            ticket["labels"] = [label for label in self.labels if label["id"] in payload["labels"]]
         ticket["updated_at"] = "2026-03-11T02:00:00+00:00"
         return deepcopy(ticket)
 

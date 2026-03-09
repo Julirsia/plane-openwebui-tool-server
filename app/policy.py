@@ -97,10 +97,10 @@ def map_names_to_ids(
             raise HTTPException(status_code=400, detail=f"Unknown assignee_name: {assignee_name}")
         assignee_ids.append(assignee_id)
     return {
-        "state_id": state_names_to_ids[attributes["initial_state_name"]],
-        "label_ids": [label_names_to_ids[name] for name in label_names],
+        "state": state_names_to_ids[attributes["initial_state_name"]],
+        "labels": [label_names_to_ids[name] for name in label_names],
         "label_names": label_names,
-        "assignee_ids": assignee_ids,
+        "assignees": assignee_ids,
     }
 
 

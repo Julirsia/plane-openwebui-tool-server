@@ -60,6 +60,22 @@ LOG_LEVEL=INFO
 
 앱은 시작 시 현재 작업 디렉터리의 `.env`를 자동으로 읽습니다.
 
+## 3-1. Plane API scope 가정
+
+이 서버는 Plane 공식 work item 문서 기준으로 endpoint scope 를 나눕니다.
+
+- workspace-scoped:
+  - readable identifier 로 티켓 조회
+  - `GET /api/v1/workspaces/{workspace_slug}/work-items/{identifier}/`
+- project-scoped:
+  - work item 목록 조회
+  - work item 생성/수정
+  - states/labels/project members
+  - comments/activities
+  - `GET|POST|PATCH /api/v1/workspaces/{workspace_slug}/projects/{project_id}/...`
+
+운영 smoke test 시 `/meta/context`, `tickets/search`, `tickets/{identifier}/context` 를 먼저 호출해 이 가정이 배포본과 맞는지 확인하십시오.
+
 ## 4. 서버 실행
 
 개발/단일 프로세스 실행:

@@ -23,7 +23,7 @@
 
 - `app/main.py`: FastAPI 진입점
 - `app/routes/`: OpenAPI 표면
-- `app/plane_client.py`: Plane REST adapter
+- `app/plane_client.py`: Plane REST adapter. workspace-scoped identifier lookup 과 project-scoped create/update/list/comment/activity 경로를 분리합니다.
 - `app/templates_registry.py`: YAML 템플릿 로딩
 - `app/renderer.py` / `app/parser.py`: HTML 생성/파싱/section patch
 - `app/policy.py`: transition, label, section edit guard
@@ -92,6 +92,18 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 서버가 올라오면 OpenAPI docs는 `http://localhost:8000/docs` 에서 확인할 수 있습니다.
 
 앱은 현재 작업 디렉터리의 `.env`를 자동으로 읽습니다.
+
+Plane adapter scope 원칙:
+
+- workspace-scoped:
+  - identifier 기반 상세 조회
+  - `/api/v1/workspaces/{workspace_slug}/work-items/{identifier}/`
+- project-scoped:
+  - project 조회
+  - work item list/create/update
+  - states / labels / members
+  - comments / activities
+  - `/api/v1/workspaces/{workspace_slug}/projects/{project_id}/...`
 
 ## 환경변수
 
