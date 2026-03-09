@@ -23,9 +23,9 @@ class PlaneClient:
         self.project_api_url = f"{self.workspace_api_url}/projects/{settings.plane_project_id}"
         self._client = httpx.AsyncClient(
             headers={"x-api-key": settings.plane_api_key, "Accept": "application/json"},
-            timeout=20.0,
+            timeout=float(settings.request_timeout_seconds),
         )
-        self._cache = TTLCache[dict[str, Any]](settings.context_cache_ttl_seconds)
+        self._cache = TTLCache[dict[str, Any]](settings.meta_cache_ttl_seconds)
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -92,8 +92,19 @@ class PlaneClient:
         self._cache.set(cache_key, {"items": items})
         return items
 
-    async def list_work_items(self, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    async def list_work_items(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        state_id: str | None = None,
+        assignee_id: str | None = None,
+    ) -> dict[str, Any]:
         params = {"limit": limit, "offset": offset, "expand": "labels,assignees,state"}
+        if state_id:
+            params["state"] = state_id
+        if assignee_id:
+            params["assignee"] = assignee_id
         return await self._request("GET", self._project_endpoint("/work-items/"), params=params)
 
     async def create_work_item(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -111,7 +122,6 @@ class PlaneClient:
         return await self._request("PATCH", self._project_endpoint(f"/work-items/{work_item_id}/"), json=payload)
 
     async def list_comments(self, work_item_id: str, limit: int) -> list[dict[str, Any]]:
-        # Assumption verified against Plane docs: comments remain project-scoped and use work_item_id UUID.
         data = await self._request(
             "GET",
             self._project_endpoint(f"/work-items/{work_item_id}/comments/"),
@@ -120,7 +130,6 @@ class PlaneClient:
         return data.get("results", data if isinstance(data, list) else [])
 
     async def create_comment(self, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        # Assumption verified against Plane docs: create comment remains project-scoped and accepts comment_html/access.
         return await self._request(
             "POST",
             self._project_endpoint(f"/work-items/{work_item_id}/comments/"),
@@ -128,7 +137,6 @@ class PlaneClient:
         )
 
     async def list_activities(self, work_item_id: str, limit: int) -> list[dict[str, Any]]:
-        # Assumption verified against Plane docs: activities remain project-scoped and use work_item_id UUID.
         data = await self._request(
             "GET",
             self._project_endpoint(f"/work-items/{work_item_id}/activities/"),

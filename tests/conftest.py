@@ -1,29 +1,27 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from pathlib import Path
 import sys
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+from pathlib import Path
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.config import Settings
-from app.deps import get_app_settings, get_plane_client, get_template_registry, get_transition_policy
+from app.deps import get_app_settings, get_plane_client
 from app.main import app
-from app.renderer import render_ticket_html
-from app.templates_registry import TemplateRegistry
 
 
 class FakePlaneClient:
     def __init__(self) -> None:
         self.project = {"id": "project-1", "name": "Support", "identifier": "SUP"}
         self.states = [
-            {"id": "state-new", "name": "New"},
             {"id": "state-triage", "name": "Triage"},
             {"id": "state-progress", "name": "In Progress"},
             {"id": "state-waiting", "name": "Waiting Customer"},
@@ -31,84 +29,35 @@ class FakePlaneClient:
             {"id": "state-resolved", "name": "Resolved"},
             {"id": "state-closed", "name": "Closed"},
         ]
-        self.labels = [{"id": f"label-{name}", "name": name} for name in [
-            "channel:email",
-            "channel:chat",
-            "channel:phone",
-            "channel:manual",
-            "kind:troubleshooting",
-            "kind:howto",
-            "kind:billing",
-            "kind:feature",
-            "product:auth",
-            "product:api",
-            "product:admin",
-            "product:billing",
-            "product:unknown",
-            "severity:s1",
-            "severity:s2",
-            "severity:s3",
-            "severity:s4",
-            "customer:premium",
-            "customer:standard",
-            "customer:unknown",
-            "comm:reply-needed",
-            "comm:draft-ready",
-            "comm:resolved-notified",
-        ]]
-        self.members = [
-            {"id": "member-1", "display_name": "홍길동"},
-            {"id": "member-2", "display_name": "김철수"},
+        self.labels = [
+            {"id": "label-auth", "name": "product:auth", "color": "#ff0000"},
+            {"id": "label-billing", "name": "product:billing", "color": "#00ff00"},
+            {"id": "label-triage", "name": "queue:triage", "color": "#0000ff"},
         ]
-        registry = TemplateRegistry(ROOT_DIR / "templates")
-        template = registry.get("support.troubleshooting")
-        attributes = {
-            "customer_name": "ACME",
-            "customer_org": "ACME Corp",
-            "channel": "email",
-            "product": "auth",
-            "severity": "s2",
-            "customer_tier": "standard",
-            "priority": "high",
-            "initial_state_name": "Triage",
-            "assignee_name": "김철수",
-        }
-        content = {
-            "short_summary": "로그인 루프",
-            "current_summary": "SSO 고객에서 로그인 루프가 보고되었습니다.",
-            "customer_symptom": "로그인 뒤 다시 로그인 화면으로 이동합니다.",
-            "impact": "관리자 12명이 주문을 확인할 수 없습니다.",
-            "environment": "Windows 11 / Chrome",
-            "reproduction": "고객 환경에서 재현됨",
-            "attempted_actions": "쿠키 삭제 후 재로그인",
-            "confirmed_facts": "Chrome 과 Edge 에서 재현됩니다.",
-            "open_questions": "비 SSO 고객 영향 여부는 미확인입니다.",
-            "suspected_cause": "redirect 또는 session 문제 가능성",
-            "next_actions_internal": "auth redirect diff 확인",
-            "customer_reply_points": "현재 조사 중이며 추가 로그를 요청할 수 있습니다.",
-            "resolution": "",
-        }
-        description_html = render_ticket_html(template, attributes, content, "홍길동")
+        self.members = [
+            {"id": "member-1", "display_name": "홍길동", "email": "hong@example.com"},
+            {"id": "member-2", "display_name": "김철수", "email": "kim@example.com"},
+        ]
         self.work_items = {
             "SUP-214": {
                 "id": "wi-214",
                 "identifier": "SUP-214",
-                "name": "[auth][s2] 로그인 루프",
-                "description_html": description_html,
+                "name": "로그인 루프",
+                "description_html": "<p>SSO 고객에서 로그인 루프가 보고되었습니다.</p><p>추가 로그 확인이 필요합니다.</p>",
                 "state": {"id": "state-triage", "name": "Triage"},
                 "priority": "high",
-                "labels": [self._label("channel:email"), self._label("kind:troubleshooting"), self._label("product:auth"), self._label("severity:s2"), self._label("customer:standard")],
+                "labels": [self._label("product:auth"), self._label("queue:triage")],
                 "assignees": [self._member("김철수")],
                 "updated_at": "2026-03-09T01:00:00+00:00",
             },
             "SUP-215": {
                 "id": "wi-215",
                 "identifier": "SUP-215",
-                "name": "[auth][s3] 대시보드 지연",
-                "description_html": description_html.replace("로그인 루프", "대시보드 지연"),
+                "name": "대시보드 지연",
+                "description_html": "<p>관리자 대시보드 로딩이 느립니다.</p>",
                 "state": {"id": "state-progress", "name": "In Progress"},
                 "priority": "medium",
-                "labels": [self._label("channel:email"), self._label("kind:troubleshooting"), self._label("product:auth"), self._label("severity:s3"), self._label("customer:standard"), self._label("comm:reply-needed")],
+                "labels": [self._label("product:auth")],
                 "assignees": [self._member("홍길동")],
                 "updated_at": "2026-03-10T01:00:00+00:00",
             },
@@ -119,7 +68,7 @@ class FakePlaneClient:
                 "description_html": "<p>고객이 로그인 오류를 제보했습니다.</p><p>SSO 설정 이후부터 발생했다고 합니다.</p>",
                 "state": {"id": "state-progress", "name": "In Progress"},
                 "priority": "high",
-                "labels": [self._label("kind:troubleshooting"), self._label("product:auth"), self._label("severity:s2")],
+                "labels": [self._label("product:auth")],
                 "assignees": [self._member("홍길동")],
                 "updated_at": "2026-03-08T01:00:00+00:00",
             },
@@ -131,7 +80,7 @@ class FakePlaneClient:
                     "created_at": "2026-03-09T01:05:00+00:00",
                     "actor_detail": {"display_name": "홍길동"},
                     "access": "INTERNAL",
-                    "comment_html": "<p><strong>[SUMMARY_REFRESH][by:홍길동]</strong></p><p>updated sections: current_summary</p>",
+                    "comment_html": "<p>로그 확인 중</p>",
                 }
             ],
             "wi-215": [],
@@ -155,6 +104,7 @@ class FakePlaneClient:
         self.updated_payloads: list[dict[str, Any]] = []
         self.created_tickets: list[dict[str, Any]] = []
         self.identifier_lookup_calls: list[str] = []
+        self.id_lookup_calls: list[str] = []
         self.list_work_items_calls: list[dict[str, Any]] = []
 
     def _label(self, name: str) -> dict[str, Any]:
@@ -178,9 +128,28 @@ class FakePlaneClient:
     async def list_project_members(self) -> list[dict[str, Any]]:
         return deepcopy(self.members)
 
-    async def list_work_items(self, limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        self.list_work_items_calls.append({"limit": limit, "offset": offset, "expand": "labels,assignees,state"})
+    async def list_work_items(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        state_id: str | None = None,
+        assignee_id: str | None = None,
+    ) -> dict[str, Any]:
+        self.list_work_items_calls.append(
+            {
+                "limit": limit,
+                "offset": offset,
+                "expand": "labels,assignees,state",
+                "state": state_id,
+                "assignee": assignee_id,
+            }
+        )
         items = sorted(self.work_items.values(), key=lambda item: item["updated_at"], reverse=True)
+        if state_id:
+            items = [item for item in items if item["state"]["id"] == state_id]
+        if assignee_id:
+            items = [item for item in items if any(member["id"] == assignee_id for member in item["assignees"])]
         end = offset + limit
         return {"results": deepcopy(items[offset:end])}
 
@@ -206,6 +175,11 @@ class FakePlaneClient:
     async def get_work_item_by_identifier(self, identifier: str) -> dict[str, Any]:
         self.identifier_lookup_calls.append(identifier)
         return deepcopy(self.work_items[identifier])
+
+    async def get_work_item_by_id(self, work_item_id: str) -> dict[str, Any]:
+        self.id_lookup_calls.append(work_item_id)
+        ticket = next(item for item in self.work_items.values() if item["id"] == work_item_id)
+        return deepcopy(ticket)
 
     async def update_work_item(self, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         self.updated_payloads.append({"work_item_id": work_item_id, "payload": deepcopy(payload)})
@@ -251,27 +225,25 @@ def fake_plane_client() -> FakePlaneClient:
 
 @pytest.fixture
 def client(fake_plane_client: FakePlaneClient) -> TestClient:
-    registry = TemplateRegistry(ROOT_DIR / "templates")
     settings = Settings(
         plane_base_url="https://plane.example.com",
         plane_workspace_slug="my-workspace",
         plane_project_id="project-uuid",
         plane_api_key="plane_api_xxx",
-        enforce_transition_policy=False,
+        default_comment_access="INTERNAL",
+        default_comment_limit=30,
+        default_activity_limit=30,
+        meta_cache_ttl_seconds=60,
+        request_timeout_seconds=20,
+        plane_state_id_triage="state-triage",
+        plane_state_id_in_progress="state-progress",
+        plane_state_id_waiting_customer="state-waiting",
+        plane_state_id_ready_to_reply="state-ready",
+        plane_state_id_resolved="state-resolved",
+        plane_state_id_closed="state-closed",
     )
-    transition_policy = {
-        "New": ["Triage"],
-        "Triage": ["In Progress", "Waiting Customer", "Ready to Reply", "Resolved"],
-        "In Progress": ["Waiting Customer", "Ready to Reply", "Resolved"],
-        "Waiting Customer": ["In Progress", "Ready to Reply"],
-        "Ready to Reply": ["Waiting Customer", "Resolved"],
-        "Resolved": ["Closed", "In Progress"],
-        "Closed": ["In Progress"],
-    }
     app.dependency_overrides[get_app_settings] = lambda: settings
     app.dependency_overrides[get_plane_client] = lambda: fake_plane_client
-    app.dependency_overrides[get_template_registry] = lambda: registry
-    app.dependency_overrides[get_transition_policy] = lambda: transition_policy
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
