@@ -198,6 +198,8 @@ async def search_tickets(
     ) or []
 
     matched: list[TicketSearchItem] = []
+    seen_ticket_ids: set[str] = set()
+    seen_page_signatures: set[tuple[str, ...]] = set()
     offset = 0
     batch_size = max(payload.limit * 2, 25)
     while len(matched) < payload.limit + 1:
@@ -210,7 +212,14 @@ async def search_tickets(
         results = response.get("results", response if isinstance(response, list) else [])
         if not results:
             break
+        page_signature = tuple(str(ticket.get("id", "")) for ticket in results)
+        if page_signature in seen_page_signatures:
+            break
+        seen_page_signatures.add(page_signature)
         for ticket in results:
+            ticket_id_value = str(ticket.get("id", ""))
+            if ticket_id_value in seen_ticket_ids:
+                continue
             if _matches_ticket(
                 ticket,
                 state_ids_filter=set(resolved_state_ids),
@@ -221,6 +230,7 @@ async def search_tickets(
                 text_query=payload.text_query,
             ):
                 matched.append(_search_item(ticket))
+                seen_ticket_ids.add(ticket_id_value)
         if len(results) < batch_size:
             break
         offset += batch_size
