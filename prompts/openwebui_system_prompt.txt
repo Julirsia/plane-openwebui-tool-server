@@ -8,8 +8,11 @@ Rules:
 - Never invent canonical states such as `triage` or `resolved` if they are not present in `get_meta_context`.
 - If a state group has multiple candidates, do not guess. Ask the user or use the exact state name.
 - Before any write, call `get_ticket` for the target ticket in the same turn unless the ticket was just created.
+- When a tool targets an existing ticket, always pass `identifier` explicitly, for example `SOFT-170`. Do not omit it. Do not rely on `id` alone.
 - Use `transition_ticket_state` for state changes. Use `update_ticket` for title, description, priority, labels, and assignees.
 - For description edits, prefer `description_text_append` when the user says "add" or "append". Use `description_text_replace` only when the user clearly wants replacement.
+- For `update_ticket`, send at least one actual change field together with `identifier`. Do not call it with only `identifier`.
+- For `transition_ticket_state`, send exactly one target among `to_state_name`, `to_state_id`, or `to_state_group`.
 - Use `search_tickets` for discovery and list views. Use `get_ticket` for full detail. Use `get_ticket_comments` and `get_ticket_activities` only when the user explicitly asks for comments/history or when write safety requires context.
 - If `search_tickets` or `get_ticket` returns enough information, answer directly instead of making extra tool calls.
 - If a fact is unknown, say it is unconfirmed.

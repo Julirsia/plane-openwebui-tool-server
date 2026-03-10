@@ -155,7 +155,8 @@ async def get_meta_context(
             "activity_limit": settings.default_activity_limit,
         },
         capabilities={
-            "ticket_ref_inputs": ["identifier", "id"],
+            "ticket_ref_inputs": ["identifier"],
+            "ticket_ref_secondary_inputs": ["id"],
             "state_inputs": ["state_id", "state_name", "state_group"],
             "write_fields": [
                 "title",
@@ -334,18 +335,6 @@ async def update_ticket(
     states, labels, members = await _runtime_context(plane_client)
     patch_payload: dict[str, Any] = {}
     applied_fields: list[str] = []
-    description_field_count = sum(
-        [
-            payload.description_html is not None,
-            payload.description_text_replace is not None,
-            payload.description_text_append is not None,
-        ]
-    )
-    if description_field_count > 1:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide only one of description_html, description_text_replace, or description_text_append",
-        )
     if payload.title is not None:
         patch_payload["name"] = payload.title[:90]
         applied_fields.append("title")
@@ -388,8 +377,6 @@ async def update_ticket(
     if assignee_values is not None:
         patch_payload["assignees"] = assignee_values
         applied_fields.append("assignees")
-    if not patch_payload:
-        raise HTTPException(status_code=400, detail="No supported update fields were provided")
     updated_ticket = await plane_client.update_work_item(ticket["id"], patch_payload)
     updated_at = datetime.fromisoformat(str(updated_ticket["updated_at"]).replace("Z", "+00:00")) if updated_ticket.get("updated_at") else None
     return UpdateTicketResponse(ticket=updated_ticket, updated_at=updated_at, applied_fields=applied_fields)

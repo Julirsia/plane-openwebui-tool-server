@@ -44,8 +44,8 @@ class MetaContextResponse(BaseModel):
 
 
 class TicketRefRequest(BaseModel):
-    identifier: Optional[str] = None
-    id: Optional[str] = None
+    identifier: Optional[str] = Field(default=None, description="Plane ticket identifier such as SOFT-170.")
+    id: Optional[str] = Field(default=None, description="Plane work item UUID. Use only as a secondary reference.")
     model_config = ConfigDict(str_strip_whitespace=True)
 
     @model_validator(mode="after")
@@ -53,6 +53,12 @@ class TicketRefRequest(BaseModel):
         if not self.identifier and not self.id:
             raise ValueError("Either identifier or id is required")
         return self
+
+
+class IdentifierTicketRefRequest(BaseModel):
+    identifier: NonEmptyStr = Field(description="Plane ticket identifier such as SOFT-170. Always include this field.")
+    id: Optional[str] = Field(default=None, description="Plane work item UUID. Optional secondary reference.")
+    model_config = ConfigDict(str_strip_whitespace=True)
 
 
 class SearchTicketsRequest(BaseModel):
@@ -119,11 +125,11 @@ class GetTicketResponse(BaseModel):
     description_text: str = ""
 
 
-class GetTicketRequest(TicketRefRequest):
+class GetTicketRequest(IdentifierTicketRefRequest):
     pass
 
 
-class TicketCommentsRequest(TicketRefRequest):
+class TicketCommentsRequest(IdentifierTicketRefRequest):
     limit: int = 30
 
     @field_validator("limit")
@@ -139,7 +145,7 @@ class TicketCommentsResponse(BaseModel):
     comments: list[dict[str, Any]]
 
 
-class TicketActivitiesRequest(TicketRefRequest):
+class TicketActivitiesRequest(IdentifierTicketRefRequest):
     limit: int = 30
 
     @field_validator("limit")
@@ -174,7 +180,7 @@ class CreateTicketResponse(BaseModel):
     ticket: dict[str, Any]
 
 
-class UpdateTicketRequest(TicketRefRequest):
+class UpdateTicketRequest(IdentifierTicketRefRequest):
     expected_updated_at: Optional[datetime] = None
     title: Optional[str] = None
     description_html: Optional[str] = None
@@ -188,7 +194,56 @@ class UpdateTicketRequest(TicketRefRequest):
     label_ids: Optional[list[str]] = None
     assignee_names: Optional[list[str]] = None
     assignee_ids: Optional[list[str]] = None
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        json_schema_extra={
+            "anyOf": [
+                {"required": ["title"]},
+                {"required": ["description_html"]},
+                {"required": ["description_text_replace"]},
+                {"required": ["description_text_append"]},
+                {"required": ["state_name"]},
+                {"required": ["state_id"]},
+                {"required": ["state_group"]},
+                {"required": ["priority"]},
+                {"required": ["label_names"]},
+                {"required": ["label_ids"]},
+                {"required": ["assignee_names"]},
+                {"required": ["assignee_ids"]},
+            ]
+        },
+    )
+
+    @model_validator(mode="after")
+    def validate_update_fields(self) -> "UpdateTicketRequest":
+        if not any(
+            [
+                self.title is not None,
+                self.description_html is not None,
+                self.description_text_replace is not None,
+                self.description_text_append is not None,
+                self.state_name is not None,
+                self.state_id is not None,
+                self.state_group is not None,
+                self.priority is not None,
+                self.label_names is not None,
+                self.label_ids is not None,
+                self.assignee_names is not None,
+                self.assignee_ids is not None,
+            ]
+        ):
+            raise ValueError("Provide at least one supported update field")
+        description_field_count = sum(
+            [
+                self.description_html is not None,
+                self.description_text_replace is not None,
+                self.description_text_append is not None,
+            ]
+        )
+        if description_field_count > 1:
+            raise ValueError("Provide only one of description_html, description_text_replace, or description_text_append")
+        return self
 
 
 class UpdateTicketResponse(BaseModel):
@@ -197,7 +252,7 @@ class UpdateTicketResponse(BaseModel):
     applied_fields: list[str]
 
 
-class AddTicketCommentRequest(TicketRefRequest):
+class AddTicketCommentRequest(IdentifierTicketRefRequest):
     body_markdown: NonEmptyStr
     access: Literal["INTERNAL", "EXTERNAL"] = "INTERNAL"
 
@@ -207,11 +262,21 @@ class AddTicketCommentResponse(BaseModel):
     comment: dict[str, Any]
 
 
-class TransitionTicketStateRequest(TicketRefRequest):
+class TransitionTicketStateRequest(IdentifierTicketRefRequest):
     expected_updated_at: Optional[datetime] = None
     to_state_name: Optional[str] = None
     to_state_id: Optional[str] = None
     to_state_group: Optional[StateGroup] = None
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        json_schema_extra={
+            "anyOf": [
+                {"required": ["to_state_name"]},
+                {"required": ["to_state_id"]},
+                {"required": ["to_state_group"]},
+            ]
+        },
+    )
 
     @model_validator(mode="after")
     def validate_target_state(self) -> "TransitionTicketStateRequest":

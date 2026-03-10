@@ -9,8 +9,8 @@ def test_get_ticket_supports_identifier_lookup(client, fake_plane_client) -> Non
     assert fake_plane_client.identifier_lookup_calls == ["SUP-214"]
 
 
-def test_get_ticket_supports_uuid_lookup(client, fake_plane_client) -> None:
-    response = client.post("/tools/get_ticket", json={"id": "wi-170"})
+def test_get_ticket_supports_uuid_lookup_when_identifier_is_also_provided(client, fake_plane_client) -> None:
+    response = client.post("/tools/get_ticket", json={"identifier": "SOFT-170", "id": "wi-170"})
 
     assert response.status_code == 200
     body = response.json()
